@@ -1,0 +1,10 @@
+name: New Environment
+values:
+  - key: token_super
+    value: ''
+  - key: token_sma
+    value: ''
+  - key: token_smp
+    value: ''
+  - key: token_sd
+    value: ''
