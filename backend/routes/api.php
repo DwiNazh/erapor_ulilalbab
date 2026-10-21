@@ -229,11 +229,17 @@ Route::middleware('auth:sanctum')->group(function () {
                 ]);
             }
 
-            // 2. Ambil data siswa berdasarkan siswa_tahun (tanpa filter siswa.status)
+            // 2. Ambil data siswa berdasarkan siswa_tahun sesuai jenjang admin
+            $user = $request->user();
+            $jenjangIds = $user ? $user->jenjangIds() : null;
+
             $data = \DB::table('siswa_tahun')
                 ->join('siswa', 'siswa_tahun.siswa_id', '=', 'siswa.id')
                 ->join('rombel', 'siswa_tahun.rombel_id', '=', 'rombel.id')
                 ->where('siswa_tahun.tahun_ajaran_id', $tahunId)
+                ->when($jenjangIds !== null, function ($q) use ($jenjangIds) {
+                    $q->whereIn('rombel.jenjang_id', $jenjangIds);
+                })
                 ->select(
                     'siswa.id',
                     'siswa.nama',
@@ -249,11 +255,26 @@ Route::middleware('auth:sanctum')->group(function () {
             ]);
         });
 
-        Route::get('/guru-list', fn() => response()->json([
-            'success' => true,
-            'data' => \App\Models\User::where('role', 'guru')
-                ->select('id', 'name as nama')->orderBy('name')->get(),
-        ]));
+        Route::get('/guru-list', function (\Illuminate\Http\Request $request) {
+            $user = $request->user();
+            $jenjangIds = $user ? $user->jenjangIds() : null;
+
+            $data = \App\Models\User::where('role', 'guru')
+                ->when($jenjangIds !== null, function ($q) use ($jenjangIds) {
+                    $q->where(function ($sub) use ($jenjangIds) {
+                        $sub->whereIn('jenjang_id', $jenjangIds)
+                            ->orWhereNull('jenjang_id');
+                    });
+                })
+                ->select('id', 'name as nama')
+                ->orderBy('name')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+            ]);
+        });
 
         Route::get('/mata-pelajaran', fn() => response()->json([
             'success' => true,

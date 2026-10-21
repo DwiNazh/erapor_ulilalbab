@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import SidebarAdminTu from "../../components/SidebarAdminTu";
 import toast from "react-hot-toast";
 import api from "../../api";
-import { perluKategori } from "../../utils/rombel";
+import { perluKategori, daftarKelas, kelasAwal, kelasAkhir } from "../../utils/rombel";
+import { useAuth } from "../../context/AuthContext";
 import {
   FaUserGraduate,
   FaArrowAltCircleUp,
@@ -16,6 +17,8 @@ import {
 
 export default function PromosiSiswa() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
 
   const [activeTahun, setActiveTahun] = useState(null);
   const [tahunTarget, setTahunTarget] = useState(null);
@@ -60,7 +63,7 @@ export default function PromosiSiswa() {
         (s) =>
           s.tahun_ajaran === tahunAktifData.nama &&
           s.is_processed !== 1 &&
-          [1, 2, 3, 4, 5, 6].includes(Number(s.tingkat_kelas || s.kelas || 0)),
+          daftarKelas(jenjang).includes(Number(s.tingkat_kelas || s.kelas || 0)),
       );
 
       setSiswaList(siswaAktif);
@@ -69,7 +72,7 @@ export default function PromosiSiswa() {
       siswaAktif.forEach((s) => {
         const id = s.siswa_id || s.id;
         const kelas = Number(s.tingkat_kelas || s.kelas || 0);
-        if (id) initial[id] = kelas === 6 ? "lulus" : "naik";
+        if (id) initial[id] = kelas === kelasAkhir(jenjang) ? "lulus" : "naik";
       });
       setPromosiSelections(initial);
     } catch (err) {
@@ -112,8 +115,8 @@ export default function PromosiSiswa() {
     siswaList.forEach((s) => {
       const id = s.siswa_id || s.id;
       const kelas = Number(s.tingkat_kelas || s.kelas || 0);
-      if (status === "naik" && kelas === 6) return; // Kelas 6 tidak bisa 'naik'
-      if (status === "lulus" && kelas !== 6) return; // Selain kelas 6 tidak bisa 'lulus'
+      if (status === "naik" && kelas === kelasAkhir(jenjang)) return; // Kelas akhir tidak bisa 'naik'
+      if (status === "lulus" && kelas !== kelasAkhir(jenjang)) return; // Selain kelas akhir tidak bisa 'lulus'
       if (id) updates[id] = status;
     });
     setPromosiSelections((prev) => ({ ...prev, ...updates }));
@@ -214,7 +217,7 @@ export default function PromosiSiswa() {
                   <FaArrowAltCircleUp />
                 </div>
                 <span className="font-bold text-slate-700">
-                  Naikkan Semua (1-5)
+                  Naikkan Semua ({kelasAwal(jenjang)}-{kelasAkhir(jenjang) - 1})
                 </span>
               </div>
             </button>
@@ -239,7 +242,7 @@ export default function PromosiSiswa() {
                   <FaUserGraduate />
                 </div>
                 <span className="font-bold text-slate-700">
-                  Luluskan Semua (6)
+                  Luluskan Semua ({kelasAkhir(jenjang)})
                 </span>
               </div>
             </button>
@@ -327,7 +330,7 @@ export default function PromosiSiswa() {
                                   }))
                                 }
                               >
-                                {kelas === 6 ? (
+                                {kelas === kelasAkhir(jenjang) ? (
                                   <>
                                     <option value="lulus">LULUS</option>
                                     <option value="tinggal">

@@ -20,10 +20,11 @@ import {
   kategoriRombel,
   daftarKelas,
 } from "../../utils/rombel";
-
-const JENJANG_HALAMAN = "SD";
+import { useAuth } from "../../context/AuthContext";
 
 export default function PenempatanSiswa() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
   const [rombelOptions, setRombelOptions] = useState([]);
   const [selectedRombel, setSelectedRombel] = useState("");
   const [siswaList, setSiswaList] = useState([]);
@@ -597,7 +598,7 @@ export default function PenempatanSiswa() {
                     required
                   >
                     <option value="">Pilih tingkat</option>
-                    {daftarKelas(JENJANG_HALAMAN).map((i) => (
+                    {daftarKelas(jenjang).map((i) => (
                       <option key={i} value={i}>Kelas {i}</option>
                     ))}
                   </select>

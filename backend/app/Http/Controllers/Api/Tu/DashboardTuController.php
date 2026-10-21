@@ -22,19 +22,35 @@ class DashboardTuController extends Controller
     {
         try {
             $user = $request->user();
-            $tahunAktif = TahunAjaran::where('aktif', 1)->first();
 
-            // PERBAIKAN: Jika tidak ada tahun aktif, lewatkan objek null ke helper components
+            $tahunDipilih = null;
+            if ($request->filled('tahun_ajaran_id')) {
+                $tahunDipilih = TahunAjaran::find($request->query('tahun_ajaran_id'));
+            }
+
+            if (!$tahunDipilih) {
+                $tahunDipilih = TahunAjaran::where('aktif', 1)->first() ?? TahunAjaran::orderByDesc('id')->first();
+            }
+
+            $allTahun = TahunAjaran::orderByDesc('id')->get()->map(fn($t) => [
+                'id'             => $t->id,
+                'nama'           => $t->nama,
+                'aktif'          => (bool) $t->aktif,
+                'semester_aktif' => $t->semester_aktif,
+                'status'         => $t->status,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Data dashboard berhasil dimuat',
                 'data'    => [
-                    'tahun_ajaran'     => $this->getTahunAjaran($tahunAktif),
-                    'statistik'        => $this->getStatistik($tahunAktif, $user),
-                    'distribusi_kelas' => $this->getDistribusiKelas($tahunAktif, $user),
-                    'status_kenaikan'  => $this->getStatusKenaikan($tahunAktif, $user),
-                    'siswa_baru'       => $this->getSiswaBaru($tahunAktif, $user),
-                    'finalisasi'       => $this->getStatusFinalisasi($tahunAktif, $user),
+                    'tahun_ajaran'        => $this->getTahunAjaran($tahunDipilih),
+                    'daftar_tahun_ajaran' => $allTahun,
+                    'statistik'           => $this->getStatistik($tahunDipilih, $user),
+                    'distribusi_kelas'    => $this->getDistribusiKelas($tahunDipilih, $user),
+                    'status_kenaikan'     => $this->getStatusKenaikan($tahunDipilih, $user),
+                    'siswa_baru'          => $this->getSiswaBaru($tahunDipilih, $user),
+                    'finalisasi'          => $this->getStatusFinalisasi($tahunDipilih, $user),
                 ],
             ]);
         } catch (\Exception $e) {
@@ -42,7 +58,7 @@ class DashboardTuController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal memuat data dashboard: ' . $e->getMessage(),
+                'message' => 'Gagal memuat data dashboard',
             ], 500);
         }
     }
@@ -132,24 +148,32 @@ class DashboardTuController extends Controller
             ->untukUser($user)
             ->count();
 
+        // Hitung rombel di tahun ajaran berikutnya (yang sedang dipersiapkan)
+        $tahunBerikutnya = TahunAjaran::where('id', '>', $tahun->id)
+            ->orderBy('id', 'asc')
+            ->first();
+        $totalRombelBerikutnya = $tahunBerikutnya
+            ? Rombel::where('tahun_ajaran_id', $tahunBerikutnya->id)->untukUser($user)->count()
+            : 0;
+
         $totalSiswaBaru    = DB::table('siswas')
-            ->whereYear('created_at', now()->year)
             ->when($jenjangIds !== null, fn($q) => $q->whereIn('jenjang_id', $jenjangIds))
             ->count();
         $belumDitempatkan  = DB::table('siswas')
-            ->whereYear('created_at', now()->year)
             ->where('is_processed', 0)
             ->when($jenjangIds !== null, fn($q) => $q->whereIn('jenjang_id', $jenjangIds))
             ->count();
 
         return [
-            'total_siswa_aktif'   => $totalSiswa,
-            'delta_siswa'         => $deltaSiswa,
-            'total_guru'          => $totalGuru,
-            'total_staf'          => $totalStaf,
-            'total_rombel'        => $totalRombel,
-            'total_siswa_baru'    => $totalSiswaBaru,
-            'belum_ditempatkan'   => $belumDitempatkan,
+            'total_siswa_aktif'        => $totalSiswa,
+            'delta_siswa'              => $deltaSiswa,
+            'total_guru'               => $totalGuru,
+            'total_staf'               => $totalStaf,
+            'total_rombel'             => $totalRombel,
+            'total_rombel_berikutnya'  => $totalRombelBerikutnya,
+            'nama_tahun_berikutnya'    => $tahunBerikutnya?->nama,
+            'total_siswa_baru'         => $totalSiswaBaru,
+            'belum_ditempatkan'        => $belumDitempatkan,
         ];
     }
 
@@ -277,13 +301,6 @@ class DashboardTuController extends Controller
         $jenjangIds = $user ? $user->jenjangIds() : null;
         if ($jenjangIds !== null) {
             $query->whereIn('siswas.jenjang_id', $jenjangIds);
-        }
-
-        if ($tahun) {
-            $query->leftJoin('rombel', function ($join) use ($tahun) {
-                $join->on('siswas.kelas', '=', DB::raw('CAST(rombel.tingkat_kelas AS CHAR)'))
-                     ->where('rombel.tahun_ajaran_id', $tahun->id);
-            });
         }
 
         $rows = $query->select(

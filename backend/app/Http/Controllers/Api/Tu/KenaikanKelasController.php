@@ -198,25 +198,19 @@ class KenaikanKelasController extends Controller
 
         $user = $request->user();
         if ($user && !$user->isSuperadmin()) {
-            $range = $user->kelasRange();
-            $allIds = collect($naik)->pluck('id')
-                ->merge(collect($tinggal)->pluck('id'))
-                ->merge(collect($lulus)->pluck('id'))
-                ->unique();
-
-            $adaDiLuarJenjang = Siswa::whereIn('id', $allIds)
-                ->where(function ($q) use ($range) {
-                    $q->where('kelas', '<', $range['min'])
-                        ->orWhere('kelas', '>', $range['max']);
-                })->exists();
-
-            if ($adaDiLuarJenjang) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Ada siswa di luar jenjang sekolah Anda yang coba diproses.'
-                ], 403);
+            $idsJenjang = $user->jenjangIds();
+            $allIds = collect($naik)->pluck('id')->merge(collect($tinggal)->pluck('id'))->merge(collect($lulus)->pluck('id'))->unique();
+            $valid = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
+                ->whereIn('siswa_id', $allIds)
+                ->whereHas('rombel', fn ($q) => $q->whereIn('jenjang_id', $idsJenjang))
+                ->pluck('siswa_id')->unique();
+            if ($valid->count() !== $allIds->count()) {
+                return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda atau tanpa data tahun aktif.'], 403);
             }
         }
+
+        $ditolak = [];
+        $batasKelas = fn ($k) => DB::table('jenjang')->where('kelas_min', '<=', $k)->where('kelas_max', '>=', $k)->value('kelas_max');
 
         DB::beginTransaction();
         try {
@@ -232,6 +226,12 @@ class KenaikanKelasController extends Controller
                     ->first();
 
                 $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
+
+                if ($kelasSekarang == 0 || $kelasSekarang >= $batasKelas($kelasSekarang)) {
+                    $ditolak[] = $siswaId;
+                    continue;
+                }
+
                 $kelasBaru = $kelasSekarang + 1;
 
                 if (
@@ -251,10 +251,6 @@ class KenaikanKelasController extends Controller
                 ]);
 
                 if ($kelasBaru >= RombelController::TINGKAT_MULAI_PISAH_GENDER) {
-                    $perluKategori[] = $siswaId;
-                }
-
-                if ($kelasSekarang >= RombelController::TINGKAT_MULAI_PISAH_GENDER) {
                     $perluKategori[] = $siswaId;
                 }
 
@@ -282,6 +278,11 @@ class KenaikanKelasController extends Controller
 
                 $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
 
+                if ($kelasSekarang == 0) {
+                    $ditolak[] = $siswaId;
+                    continue;
+                }
+
                 if (
                     SiswaTahun::where('siswa_id', $siswaId)
                         ->where('tahun_ajaran_id', $tahunTargetId)->exists()
@@ -298,6 +299,10 @@ class KenaikanKelasController extends Controller
                     'is_processed' => 1,
                 ]);
 
+                if ($kelasSekarang >= RombelController::TINGKAT_MULAI_PISAH_GENDER) {
+                    $perluKategori[] = $siswaId;
+                }
+
                 SiswaTahun::where('siswa_id', $siswaId)
                     ->where('tahun_ajaran_id', $tahunAktif->id)
                     ->update(['is_processed' => 1]);
@@ -312,6 +317,17 @@ class KenaikanKelasController extends Controller
             // ====================== LULUS (Kelas 6) ======================
             foreach ($lulus as $item) {
                 $siswaId = $item['id'];
+
+                $current = SiswaTahun::where('siswa_id', $siswaId)
+                    ->where('tahun_ajaran_id', $tahunAktif->id)
+                    ->first();
+
+                $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
+
+                if ($kelasSekarang == 0 || $kelasSekarang != $batasKelas($kelasSekarang)) {
+                    $ditolak[] = $siswaId;
+                    continue;
+                }
 
                 SiswaTahun::where('siswa_id', $siswaId)
                     ->where('tahun_ajaran_id', $tahunAktif->id)
@@ -341,6 +357,7 @@ class KenaikanKelasController extends Controller
                     'tinggal' => count($tinggal),
                     'lulus' => count($lulus),
                 ],
+                'ditolak' => $ditolak,
                 'peringatan_kategori' => [
                     'jumlah' => $tanpaKategori->count(),
                     'nama' => $tanpaKategori->take(20)->all(),
@@ -352,7 +369,7 @@ class KenaikanKelasController extends Controller
             Log::error('Error promosi: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal menyimpan promosi: ' . $e->getMessage()
+                'message' => 'Gagal menyimpan promosi.'
             ], 500);
         }
     }
@@ -473,6 +490,9 @@ class KenaikanKelasController extends Controller
     public function finalisasiTotal(Request $request)
     {
         $user = $request->user();
+        if (!$user->isSuperadmin() && !$user->jenjang_id) {
+            return response()->json(['success' => false, 'message' => 'Akun Anda belum terhubung ke jenjang.'], 403);
+        }
         $tahunAktif = TahunAjaran::where('aktif', 1)->first();
 
         if (!$tahunAktif) {

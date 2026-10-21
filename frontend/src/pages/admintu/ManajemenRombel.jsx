@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import SidebarAdminTu from "../../components/SidebarAdminTu";
 import toast from "react-hot-toast";
 import api from "../../api";
+import { useAuth } from "../../context/AuthContext";
+import { kelasAwal, perluKategori, KATEGORI_LABEL } from "../../utils/rombel";
 import {
   FaPlus,
   FaTrashAlt,
@@ -14,15 +16,23 @@ import {
 } from "react-icons/fa";
 
 export default function RombelDanWaliKelasKelas1() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
+  const targetKelas = kelasAwal(jenjang);
+
   const [tahunTujuan, setTahunTujuan] = useState(null);
   const [rombels, setRombels] = useState([]);
   const [gurus, setGurus] = useState([]);
   const [waliAssignments, setWaliAssignments] = useState({});
   const [loading, setLoading] = useState(true);
 
-  // Modal Tambah Rombel (PERSIS seperti PenempatanSiswa)
+  // Modal Tambah Rombel
   const [showAddRombelModal, setShowAddRombelModal] = useState(false);
-  const [rombelForm, setRombelForm] = useState({ tingkat_kelas: "1", sub_nama: "" });
+  const [rombelForm, setRombelForm] = useState({
+    tingkat_kelas: String(targetKelas || 1),
+    sub_nama: "",
+    kategori: "",
+  });
   const [rombelError, setRombelError] = useState("");
   const [addingRombel, setAddingRombel] = useState(false);
 
@@ -30,7 +40,12 @@ export default function RombelDanWaliKelasKelas1() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+    setRombelForm((prev) => ({
+      ...prev,
+      tingkat_kelas: String(targetKelas || 1),
+      kategori: "",
+    }));
+  }, [targetKelas]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -51,7 +66,7 @@ export default function RombelDanWaliKelasKelas1() {
 
       const [rombelRes, guruRes] = await Promise.all([
         api.get(`${API}/rombel`, {
-          params: { tahun_ajaran_id: target.id, kelas: 1 },
+          params: { tahun_ajaran_id: target.id, kelas: targetKelas },
         }),
         api.get(`${API}/guru`),
       ]);
@@ -82,7 +97,7 @@ export default function RombelDanWaliKelasKelas1() {
       toast.success("Rombel berhasil dihapus");
       fetchData();
     } catch (err) {
-      toast.error("Gagal hapus rombel");
+      toast.error(err.response?.data?.message || "Gagal hapus rombel");
     }
   };
 
@@ -97,17 +112,17 @@ export default function RombelDanWaliKelasKelas1() {
     try {
       await api.post(`${API}/wali-kelas/siswa-baru`, {
         tahun_ajaran_id: tahunTujuan.id,
-        kelas: 1,
+        kelas: targetKelas,
         wali_kelas: waliAssignments,
       });
       toast.success("Berhasil simpan wali kelas");
     } catch (err) {
       console.error(err);
-      toast.error("Gagal simpan");
+      toast.error(err.response?.data?.message || "Gagal simpan");
     }
   };
 
-  // Tambah rombel persis seperti PenempatanSiswa
+  // Tambah rombel
   const handleTambahRombel = async (e) => {
     e.preventDefault();
     setAddingRombel(true);
@@ -124,24 +139,59 @@ export default function RombelDanWaliKelasKelas1() {
       return;
     }
 
-    try {
-      await Promise.all(
-        subNamaList.map((sub) =>
-          api.post(`${API}/rombel`, {
-            tahun_ajaran_id: tahunTujuan.id,
-            tingkat_kelas: 1,
-            sub_nama: sub.toUpperCase(),
-          })
-        )
-      );
+    if (subNamaList.some((s) => s.length > 1)) {
+      setAddingRombel(false);
+      setRombelError("Setiap sub nama hanya boleh 1 huruf. Pisahkan dengan koma, contoh: A, B, C");
+      return;
+    }
 
-      toast.success(`Berhasil menambahkan ${subNamaList.length} rombel`);
-      setShowAddRombelModal(false);
-      setRombelForm({ tingkat_kelas: "1", sub_nama: "" });
-      fetchData();
+    const butuhGender = perluKategori(targetKelas);
+    if (butuhGender && !rombelForm.kategori) {
+      setAddingRombel(false);
+      setRombelError("Pilih Ikhwan, Akhwat, atau keduanya untuk kelas 4 ke atas.");
+      return;
+    }
+
+    const daftarGender = !butuhGender
+      ? [null]
+      : rombelForm.kategori === "keduanya"
+        ? ["ikhwan", "akhwat"]
+        : [rombelForm.kategori];
+
+    const tugas = [];
+    subNamaList.forEach((sub) => {
+      daftarGender.forEach((g) => {
+        const payload = {
+          tahun_ajaran_id: tahunTujuan.id,
+          tingkat_kelas: Number(targetKelas),
+          sub_nama: sub.toUpperCase(),
+        };
+        if (g) payload.kategori = g;
+        tugas.push(api.post(`${API}/rombel`, payload));
+      });
+    });
+
+    try {
+      const hasil = await Promise.allSettled(tugas);
+      const gagal = hasil.filter((h) => h.status === "rejected");
+      const berhasil = hasil.length - gagal.length;
+
+      if (berhasil > 0) {
+        toast.success(`Berhasil menambahkan ${berhasil} rombel`);
+        fetchData();
+      }
+
+      if (gagal.length > 0) {
+        setRombelError(
+          gagal[0].reason?.response?.data?.message || "Gagal tambah rombel"
+        );
+      } else {
+        setShowAddRombelModal(false);
+        setRombelForm({ tingkat_kelas: String(targetKelas || 1), sub_nama: "", kategori: "" });
+      }
     } catch (err) {
       console.error(err);
-      toast.error("Gagal tambah rombel");
+      toast.error(err.response?.data?.message || "Gagal tambah rombel");
     } finally {
       setAddingRombel(false);
     }
@@ -171,7 +221,7 @@ export default function RombelDanWaliKelasKelas1() {
               </h1>
               <div className="flex items-center gap-2 mt-1">
                 <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-bold uppercase tracking-wider">
-                  Kelas 1
+                  Kelas {targetKelas}
                 </span>
                 <span className="text-slate-400 text-sm">Target TA:</span>
                 <span className="text-emerald-600 font-bold text-sm underline decoration-emerald-200 underline-offset-4">
@@ -222,8 +272,15 @@ export default function RombelDanWaliKelasKelas1() {
                             <span className="text-xs font-bold text-slate-400 block uppercase">
                               Sub Kelas
                             </span>
-                            <span className="font-bold text-slate-700 text-lg">
-                              1{r.sub_nama}
+                            <span className="font-bold text-slate-700 text-lg flex items-center gap-2">
+                              {r.nama_rombel || `${r.tingkat_kelas || targetKelas}${r.sub_nama}`}
+                              {r.kelompok_gender && r.kelompok_gender !== "campuran" && (
+                                <span className={`text-[10px] uppercase px-2 py-0.5 rounded-full font-bold ${
+                                  r.kelompok_gender === "ikhwan" ? "bg-blue-100 text-blue-700" : "bg-pink-100 text-pink-700"
+                                }`}>
+                                  {r.kelompok_gender}
+                                </span>
+                              )}
                             </span>
                           </div>
 
@@ -265,9 +322,9 @@ export default function RombelDanWaliKelasKelas1() {
                           key={r.id}
                           className="flex flex-col md:flex-row md:items-center gap-4 p-4 border border-dashed border-slate-200 rounded-xl"
                         >
-                          <div className="min-w-[80px]">
+                          <div className="min-w-[120px]">
                             <span className="text-sm font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-                              Kelas 1{r.sub_nama}
+                              {r.nama_rombel || `Kelas ${r.tingkat_kelas || targetKelas}${r.sub_nama}`}
                             </span>
                           </div>
 
@@ -305,7 +362,7 @@ export default function RombelDanWaliKelasKelas1() {
             </div>
           </div>
 
-          {/* MODAL TAMBAH ROMBEL (PERSIS) */}
+          {/* MODAL TAMBAH ROMBEL */}
           {showAddRombelModal && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
               <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all">
@@ -337,9 +394,35 @@ export default function RombelDanWaliKelasKelas1() {
                       disabled
                       className="w-full px-4 py-3 bg-slate-100 border border-slate-200 rounded-xl outline-none text-slate-500 font-bold cursor-not-allowed"
                     >
-                      <option value="1">Kelas 1</option>
+                      <option value={targetKelas}>Kelas {targetKelas}</option>
                     </select>
                   </div>
+
+                  {perluKategori(targetKelas) && (
+                    <div>
+                      <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                        Kelompok
+                      </label>
+                      <select
+                        value={rombelForm.kategori}
+                        onChange={(e) =>
+                          setRombelForm({
+                            ...rombelForm,
+                            kategori: e.target.value,
+                          })
+                        }
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-semibold text-slate-700"
+                        required
+                      >
+                        <option value="">-- Pilih Kelompok --</option>
+                        <option value="ikhwan">Ikhwan</option>
+                        <option value="akhwat">Akhwat</option>
+                        <option value="keduanya">
+                          Ikhwan & Akhwat (buat dua rombel)
+                        </option>
+                      </select>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">

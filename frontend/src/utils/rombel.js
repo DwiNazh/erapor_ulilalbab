@@ -16,4 +16,9 @@ export const KELAS_PER_JENJANG = {
   SMP: [7, 8, 9],
   SMA: [10, 11, 12],
 };
-export const daftarKelas = (jenjang = "SD") => KELAS_PER_JENJANG[jenjang] ?? [];
+
+export const SEMUA_KELAS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+export const daftarKelas = (jenjang) => KELAS_PER_JENJANG[jenjang] ?? SEMUA_KELAS;
+export const kelasAwal = (j) => daftarKelas(j)[0];
+export const kelasAkhir = (j) => { const d = daftarKelas(j); return d[d.length - 1]; };
+export const rentangKelas = (j) => `Kelas ${kelasAwal(j)} - ${kelasAkhir(j)}`;

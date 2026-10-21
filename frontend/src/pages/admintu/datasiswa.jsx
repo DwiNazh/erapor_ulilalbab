@@ -20,9 +20,12 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import toast from "react-hot-toast";
 import api from "../../api";
-import { KATEGORI_LABEL, perluKategori } from "../../utils/rombel";
+import { KATEGORI_LABEL, perluKategori, daftarKelas } from "../../utils/rombel";
+import { useAuth } from "../../context/AuthContext";
 
 export default function DataSiswa() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
   const [kelasDipilih, setKelasDipilih] = useState(null);
   const [subDipilih, setSubDipilih] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -360,7 +363,8 @@ export default function DataSiswa() {
                   animate={{ opacity: 1 }}
                   className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
                 >
-                  {[1, 2, 3, 4, 5, 6].map((kelas) => {
+                  {daftarKelas(jenjang).map((kelas) => {
+                    const warna = warnaKelas[kelas] ?? warnaKelas[((kelas - 1) % 6) + 1];
                     const adaBelumPromosi =
                       dataTerstruktur[String(kelas)] &&
                       Object.values(dataTerstruktur[String(kelas)]).some(
@@ -374,7 +378,7 @@ export default function DataSiswa() {
                         className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200 cursor-pointer hover:shadow-xl hover:border-indigo-300 transition-all group relative"
                       >
                         <div
-                          className={`w-16 h-16 rounded-2xl mb-6 flex items-center justify-center bg-gradient-to-br ${warnaKelas[kelas][0]} ${warnaKelas[kelas][1]} text-white shadow-lg`}
+                          className={`w-16 h-16 rounded-2xl mb-6 flex items-center justify-center bg-gradient-to-br ${warna[0]} ${warna[1]} text-white shadow-lg`}
                         >
                           <FaSchool size={24} />
                         </div>

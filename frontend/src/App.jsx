@@ -176,6 +176,7 @@ function App() {
 
         {/* ====================== ADMIN TU ====================== */}
         <Route element={<ProtectedRoute allowedRoles={["admintu"]} />}>
+          <Route path="/dashboardtu" element={<DashboardAdminSD />} />
           <Route path="/dashboardtusd" element={<DashboardAdminSD />} />
 
           {/* Academic */}

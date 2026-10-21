@@ -16,8 +16,14 @@ import SidebarAdminTu from "../../components/SidebarAdminTu";
 import Footer from "../../components/footer";
 import api from "../../api";
 import toast from "react-hot-toast";
+import { useAuth } from "../../context/AuthContext";
+import { kelasAwal } from "../../utils/rombel";
 
 export default function SiswaBaruPage() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
+  const targetKelas = kelasAwal(jenjang);
+
   const [siswaBaru, setSiswaBaru] = useState([]);
   const [rombels, setRombels] = useState([]);
   const [selectedRombelId, setSelectedRombelId] = useState("");
@@ -38,7 +44,7 @@ export default function SiswaBaruPage() {
     try {
       const [siswaRes, rombelRes] = await Promise.all([
         api.get(`${API}/siswa-baru`),
-        api.get(`${API}/rombel?kelas=1&has_wali=true&tahun=next`), // ← sesuai dengan backend
+        api.get(`${API}/rombel?kelas=${targetKelas}&tahun=next`),
       ]);
 
       setSiswaBaru(siswaRes.data.map((s) => ({
@@ -172,7 +178,7 @@ export default function SiswaBaruPage() {
                 <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
                   <FaUserPlus className="text-indigo-600" /> Penerimaan Siswa Baru
                 </h1>
-                <p className="text-slate-500 mt-1">Kelola pembagian rombel dan registrasi NIS siswa kelas 1.</p>
+                <p className="text-slate-500 mt-1">Kelola pembagian rombel dan registrasi NIS siswa kelas {targetKelas}.</p>
               </div>
               <button 
                 onClick={fetchData}
@@ -193,7 +199,8 @@ export default function SiswaBaruPage() {
                   <option value="">-- Pilih Rombel Tujuan --</option>
                   {rombels.map((r) => (
                     <option key={r.id} value={r.id}>
-                      Kelas 1{r.sub_nama} — {r.wali_kelas_nama}
+                      {r.nama_rombel || `Kelas ${r.tingkat_kelas || targetKelas}${r.sub_nama}`}
+                      {r.wali_kelas_nama ? ` — ${r.wali_kelas_nama}` : " — (Belum ada wali)"}
                     </option>
                   ))}
                 </select>
@@ -264,7 +271,7 @@ export default function SiswaBaruPage() {
                         </td>
                         <td className="px-6 py-4 text-center">
                           {s.sub_kelas ? (
-                            <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-black">1{s.sub_kelas}</span>
+                            <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-black">{targetKelas}{s.sub_kelas}</span>
                           ) : (
                             <span className="text-slate-300 text-xs italic">Belum Set</span>
                           )}

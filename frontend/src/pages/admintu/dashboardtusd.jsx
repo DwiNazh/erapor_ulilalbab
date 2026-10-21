@@ -7,6 +7,8 @@ import {
 } from "react-icons/fa";
 import { Link, useLocation } from "react-router-dom";
 import SidebarAdminTu from "../../components/SidebarAdminTu";
+import { useAuth } from "../../context/AuthContext";
+import { rentangKelas } from "../../utils/rombel";
 
 // ─── HELPER COMPONENTS ───────────────────────────────────────────────────────
 
@@ -98,31 +100,40 @@ function Pill({ status }) {
 // ─── MAIN DASHBOARD COMPONENT ────────────────────────────────────────────────
 
 export default function DashboardTuSD() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dashboardData, setDashboardData] = useState(null);
+  const [selectedTahunId, setSelectedTahunId] = useState("");
+
+  const fetchDashboard = async (tahunId = "") => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const url = tahunId ? `/api/tu/dashboard?tahun_ajaran_id=${tahunId}` : '/api/tu/dashboard';
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.message || 'Gagal memuat dashboard');
+      setDashboardData(result.data);
+      if (result.data?.tahun_ajaran?.id) {
+        setSelectedTahunId(result.data.tahun_ajaran.id);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchDashboard = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const res = await fetch('/api/tu/dashboard', {
-          headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
-        });
-        const result = await res.json();
-        if (!res.ok || !result.success) throw new Error(result.message || 'Gagal memuat dashboard');
-        setDashboardData(result.data);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchDashboard();
   }, []);
 
-  if (loading) return (
+  if (loading && !dashboardData) return (
     <div className="flex h-screen items-center justify-center bg-white font-sans">
       <div className="text-center">
         <div className="w-12 h-12 border-4 border-emerald-100 border-t-emerald-600 rounded-full animate-spin mx-auto mb-4" />
@@ -147,7 +158,8 @@ export default function DashboardTuSD() {
     status_kenaikan = {}, 
     siswa_baru = [], 
     finalisasi = {}, 
-    tahun_ajaran = null 
+    tahun_ajaran = null,
+    daftar_tahun_ajaran = []
   } = dashboardData;
 
   return (
@@ -170,14 +182,31 @@ export default function DashboardTuSD() {
 
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex flex-col items-end">
-              <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${tahun_ajaran ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                {tahun_ajaran ? 'Aktif' : 'Non-Aktif'}
+              <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full ${tahun_ajaran?.status === 'aktif' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
+                {tahun_ajaran?.status ? tahun_ajaran.status.toUpperCase() : 'NON-AKTIF'}
               </span>
-              <span className="text-sm font-bold text-slate-700">
-                {tahun_ajaran ? `T.A. ${tahun_ajaran.nama}` : 'T.A. Tidak Tersedia'}
-              </span>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-xs text-slate-400 font-bold">T.A:</span>
+                <select
+                  value={tahun_ajaran?.id || selectedTahunId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setSelectedTahunId(id);
+                    fetchDashboard(id);
+                  }}
+                  className="text-sm font-black text-slate-800 bg-transparent border-b-2 border-indigo-400 focus:border-indigo-600 outline-none cursor-pointer py-0.5"
+                >
+                  {(daftar_tahun_ajaran || []).map((t) => (
+                    <option key={t.id} value={t.id} className="text-slate-800 font-bold">
+                      {t.nama} {t.aktif ? '(Aktif Saat Ini)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm bg-emerald-500 flex items-center justify-center text-white font-bold">TU</div>
+            <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm bg-indigo-600 flex items-center justify-center text-white font-bold text-xs uppercase">
+              {jenjang || "TU"}
+            </div>
           </div>
         </header>
 
@@ -191,7 +220,7 @@ export default function DashboardTuSD() {
                 <h2 className="text-3xl font-black text-white mb-2">Selamat datang kembali! 👋</h2>
                 <p className="text-slate-400 text-sm max-w-md">
                   {tahun_ajaran 
-                    ? `Data akademik Tahun Ajaran ${tahun_ajaran.nama} Semester ${tahun_ajaran.semester_aktif} telah diperbarui.`
+                    ? `Data akademik Tahun Ajaran ${tahun_ajaran.nama} ${tahun_ajaran.semester_aktif ? `Semester ${tahun_ajaran.semester_aktif}` : ''} telah diperbarui.`
                     : "Sistem belum mendeteksi adanya Tahun Ajaran aktif saat ini."
                   }
                 </p>
@@ -209,9 +238,27 @@ export default function DashboardTuSD() {
           {/* Stats Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard icon={<FaUsers size={20}/>} value={statistik?.total_siswa_aktif || 0} label="Siswa Aktif" delta={`${(statistik?.delta_siswa || 0) >= 0 ? '+' : ''}${statistik?.delta_siswa || 0} Siswa`} deltaUp={(statistik?.delta_siswa || 0) >= 0} color="emerald" />
-            <StatCard icon={<FaChalkboardTeacher size={20}/>} value={(statistik?.total_guru || 0) + (statistik?.total_staf || 0)} label="Guru & Staf" delta={`${statistik?.total_guru || 0} Guru Aktif`} deltaUp={true} color="blue" />
-            <StatCard icon={<FaSchool size={20}/>} value={statistik?.total_rombel || 0} label="Total Rombel" delta="Kelas 1 - 6" color="amber" />
-            <StatCard icon={<FaUserGraduate size={20}/>} value={statistik?.total_siswa_baru || 0} label="PPDB Baru" delta={`${statistik?.belum_ditempatkan || 0} Antrean`} deltaUp={false} color="rose" />
+            <StatCard icon={<FaChalkboardTeacher size={20}/>} value={(statistik?.total_guru || 0) + (statistik?.total_staf || 0)} label="Guru & Staf" delta={`${statistik?.total_guru || 0} Guru`} deltaUp={true} color="blue" />
+            <StatCard 
+              icon={<FaSchool size={20}/>} 
+              value={statistik?.total_rombel || 0} 
+              label="Total Rombel" 
+              delta={
+                statistik?.total_rombel_berikutnya > 0 
+                  ? `+${statistik.total_rombel_berikutnya} Rombel Baru (${statistik.nama_tahun_berikutnya || 'TA Depan'})` 
+                  : rentangKelas(jenjang)
+              } 
+              deltaUp={statistik?.total_rombel_berikutnya > 0}
+              color="amber" 
+            />
+            <StatCard 
+              icon={<FaUserGraduate size={20}/>} 
+              value={statistik?.total_siswa_baru || 0} 
+              label="PPDB Baru" 
+              delta={`${statistik?.belum_ditempatkan || 0} Belum Masuk Kelas`} 
+              deltaUp={(statistik?.belum_ditempatkan || 0) === 0} 
+              color="rose" 
+            />
           </div>
 
           {/* Charts Row */}

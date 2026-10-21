@@ -81,7 +81,7 @@ class PenempatanSiswaController extends Controller
             Log::error('Error siswaBelumTerdaftar: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal memuat data siswa: ' . $e->getMessage()
+                'message' => 'Gagal memuat data siswa'
             ], 500);
         }
     }
@@ -135,6 +135,11 @@ class PenempatanSiswaController extends Controller
                 'success' => false,
                 'message' => 'Rombel tidak ditemukan atau di luar jenjang yang Anda kelola.'
             ], 403);
+        }
+
+        $ditemukan = SiswaTahun::untukUser($request->user())->where('tahun_ajaran_id', $tahunId)->whereIn('id', $siswaIds)->count();
+        if ($ditemukan !== count($siswaIds)) {
+            return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda.'], 403);
         }
 
         // ATURAN KATEGORI: rombel ikhwan hanya untuk siswa ikhwan, rombel akhwat hanya untuk siswa akhwat

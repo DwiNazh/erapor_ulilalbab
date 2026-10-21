@@ -58,8 +58,8 @@ class SyncPpdbStudents extends Command
         $baru = 0;
         $diperbarui = 0;
         $dilewati = 0;
-        $jumlahL = 0;
-        $jumlahP = 0;
+        $jumlahIkhwan = 0;
+        $jumlahAkhwat = 0;
         $tidakDikenali = [];
 
         foreach ($data as $row) {
@@ -135,7 +135,7 @@ class SyncPpdbStudents extends Command
         $akhwat = str_contains($teks, 'akhwat');
 
         if ($ikhwan xor $akhwat) {
-            return $ikhwan ? 'L' : 'P';
+            return $ikhwan ? 'ikhwan' : 'akhwat';
         }
 
         return null;

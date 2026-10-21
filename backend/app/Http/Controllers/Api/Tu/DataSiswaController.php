@@ -36,6 +36,8 @@ class DataSiswaController extends Controller
                 'siswa.nama',
                 'siswa.nis',
                 'siswa.kategori',
+                'rombel.kelompok_gender',
+                'rombel.jenjang_id',
                 DB::raw('COALESCE(rombel.tingkat_kelas, siswa.kelas) as kelas'),
                 DB::raw('COALESCE(rombel.tingkat_kelas, siswa.kelas) as tingkat_kelas'),
                 'siswa_tahun.is_processed',
@@ -59,15 +61,29 @@ class DataSiswaController extends Controller
     public function show($id)
     {
         try {
+            $user = request()->user();
+
             // Cek siswa baru dulu
             $siswa = SiswaBaru::where('id', $id)
                 ->where('is_processed', 1)
                 ->first();
 
-            // Jika tidak ada, cek siswa lama
-            if (!$siswa) {
+            if ($siswa) {
+                if (!$user || !$user->bolehJenjang($siswa->jenjang_id)) {
+                    return response()->json([
+                        'message' => 'Data siswa tidak ditemukan'
+                    ], 404);
+                }
+            } else {
+                // Jika tidak ada, cek siswa lama
                 $siswa = Siswa::where('id', $id)->first();
                 if ($siswa) {
+                    if (!$this->siswaBolehDiakses($siswa->id)) {
+                        return response()->json([
+                            'message' => 'Data siswa tidak ditemukan'
+                        ], 404);
+                    }
+
                     $latestSt = SiswaTahun::where('siswa_id', $siswa->id)
                         ->orderByDesc('id')
                         ->with('rombel')
@@ -100,6 +116,10 @@ class DataSiswaController extends Controller
         ]);
 
         $siswa = Siswa::findOrFail($id);
+
+        if (!$this->siswaBolehDiakses($siswa->id)) {
+            return response()->json(['message' => 'Data siswa tidak ditemukan'], 404);
+        }
 
         if ($this->bentrokDenganRombel($siswa->id, $data['kategori'])) {
             return response()->json([
@@ -138,6 +158,10 @@ class DataSiswaController extends Controller
                     $tidakDitemukan[] = $row['nis'];
                     continue;
                 }
+                if (!$this->siswaBolehDiakses($siswa->id)) {
+                    $tidakDitemukan[] = $row['nis'];
+                    continue;
+                }
                 if ($this->bentrokDenganRombel($siswa->id, $row['kategori'])) {
                     $ditolakBentrok[] = $row['nis'];
                     continue;
@@ -155,6 +179,13 @@ class DataSiswaController extends Controller
             'tidak_ditemukan' => $tidakDitemukan,
             'ditolak_bentrok' => $ditolakBentrok,
         ]);
+    }
+
+    private function siswaBolehDiakses(int $siswaId): bool {
+        $user = request()->user();
+        if (!$user) return false;
+        if ($user->isSuperadmin()) return true;
+        return SiswaTahun::untukUser($user)->where('siswa_id', $siswaId)->exists();
     }
 
     private function bentrokDenganRombel(int $siswaId, string $kategori): bool
