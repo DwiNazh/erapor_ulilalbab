@@ -150,7 +150,7 @@ class Pengaturansuperadmincontroller extends Controller
             'nama'            => $request->tahun,
             'semester_aktif'  => $request->semester == 1 ? 'ganjil' : 'genap',
             'aktif'           => 0,
-            'status'          => 'aktif',
+            'status'          => 'draft',
             'created_at'      => now(),
             'updated_at'      => now(),
         ]);
@@ -163,8 +163,9 @@ class Pengaturansuperadmincontroller extends Controller
 
     public function aktifkanTahunAjaran($id)
     {
-        DB::table('tahun_ajaran')->update([
-            'aktif' => 0
+        DB::table('tahun_ajaran')->where('id', '!=', $id)->update([
+            'aktif'  => 0,
+            'status' => 'dikunci',
         ]);
 
         DB::table('tahun_ajaran')->where('id', $id)->update([

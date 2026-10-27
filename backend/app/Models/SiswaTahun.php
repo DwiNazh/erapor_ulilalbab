@@ -16,8 +16,18 @@ class SiswaTahun extends Model
         'siswa_id',
         'tahun_ajaran_id',
         'rombel_id',
+        'jenjang_id',
         'status',
+        'is_processed',
     ];
+
+    protected static function booted(): void {
+        static::creating(function ($st) {
+            if (!$st->jenjang_id && $st->rombel_id) {
+                $st->jenjang_id = \Illuminate\Support\Facades\DB::table('rombel')->where('id', $st->rombel_id)->value('jenjang_id');
+            }
+        });
+    }
     
     public function siswa()
     {
@@ -37,23 +47,13 @@ class SiswaTahun extends Model
         return $this->belongsTo(TahunAjaran::class, 'tahun_ajaran_id', 'id');
     }
 
-    public function scopeUntukUser($query, $user)
-    {
-        if (!$user || $user->isSuperadmin()) {
-            return $query;
-        }
-        $ids = $user->jenjangIds();
-        $range = $user->kelasRange();
-
-        return $query->where(function ($q) use ($ids, $range) {
-            $q->whereHas('rombel', function ($rq) use ($ids) {
-                $rq->whereIn('jenjang_id', $ids);
-            })->orWhere(function ($oq) use ($range) {
-                $oq->whereNull('siswa_tahun.rombel_id')
-                   ->whereHas('siswa', function ($sq) use ($range) {
-                       $sq->whereBetween('kelas', [$range['min'], $range['max']]);
-                   });
-            });
+    public function scopeUntukUser($query, $user) {
+        if (!$user) { return $query->whereRaw('1 = 0'); }
+        $ids = $user->jenjangIds(); // null = semua jenjang
+        if ($ids === null) { return $query; }
+        return $query->where(function ($q) use ($ids) {
+            $q->whereIn('siswa_tahun.jenjang_id', $ids)
+              ->orWhereHas('rombel', fn($r) => $r->whereIn('jenjang_id', $ids));
         });
     }
 }

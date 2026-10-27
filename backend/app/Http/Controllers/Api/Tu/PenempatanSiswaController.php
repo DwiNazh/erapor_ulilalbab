@@ -137,23 +137,70 @@ class PenempatanSiswaController extends Controller
             ], 403);
         }
 
-        $ditemukan = SiswaTahun::untukUser($request->user())->where('tahun_ajaran_id', $tahunId)->whereIn('id', $siswaIds)->count();
-        if ($ditemukan !== count($siswaIds)) {
-            return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda.'], 403);
+        // Ambil data siswa_tahun beserta relasi siswa
+        $targetSt = SiswaTahun::with('siswa')
+            ->where('tahun_ajaran_id', $tahunId)
+            ->whereIn('id', $siswaIds)
+            ->get();
+
+        if ($targetSt->count() !== count($siswaIds)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Ada siswa yang tidak ditemukan pada tahun ajaran target.'
+            ], 404);
         }
 
-        // ATURAN KATEGORI: rombel ikhwan hanya untuk siswa ikhwan, rombel akhwat hanya untuk siswa akhwat
+        // 1. Validasi Jenjang Pengguna & Jenjang Rombel
+        $user = $request->user();
+        if ($user && !$user->isSuperadmin()) {
+            $idsJenjang = $user->jenjangIds();
+            foreach ($targetSt as $st) {
+                if ($st->jenjang_id && !in_array((int) $st->jenjang_id, $idsJenjang, true)) {
+                    return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda.'], 403);
+                }
+            }
+        }
+
+        foreach ($targetSt as $st) {
+            if ($st->jenjang_id && (int) $st->jenjang_id !== (int) $rombel->jenjang_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Jenjang rombel tidak sesuai dengan jenjang siswa ({$st->siswa?->nama})."
+                ], 422);
+            }
+        }
+
+        // 2. Validasi Tingkat Kelas Rombel vs Status Kelas Siswa Hasil Promosi
+        $kelasTidakSesuai = [];
+        foreach ($targetSt as $st) {
+            $siswa = $st->siswa;
+            if (!$siswa) continue;
+
+            if ($st->status === 'LULUS' || $siswa->is_graduated) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Siswa {$siswa->nama} berstatus LULUS dan tidak dapat ditempatkan ke dalam rombel."
+                ], 422);
+            }
+
+            if ((int) $siswa->kelas !== (int) $rombel->tingkat_kelas) {
+                $kelasTidakSesuai[] = "{$siswa->nama} (Kelas {$siswa->kelas} vs Rombel Kelas {$rombel->tingkat_kelas})";
+            }
+        }
+
+        if (!empty($kelasTidakSesuai)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Tingkat kelas rombel ({$rombel->tingkat_kelas}) tidak sesuai dengan status kelas siswa: " . implode(', ', array_slice($kelasTidakSesuai, 0, 5)) . (count($kelasTidakSesuai) > 5 ? ' dan siswa lainnya.' : '.'),
+            ], 422);
+        }
+
+        // 3. Validasi Kategori Gender: rombel ikhwan hanya untuk siswa ikhwan, rombel akhwat hanya untuk siswa akhwat
         if (in_array($rombel->kelompok_gender, ['ikhwan', 'akhwat'], true)) {
-            $tidakSesuai = SiswaTahun::with('siswa:id,nama,kategori')
-                ->where('tahun_ajaran_id', $tahunId)
-                ->whereIn('id', $siswaIds)
-                ->whereHas('siswa', function ($q) use ($rombel) {
-                    $q->where(function ($q2) use ($rombel) {
-                        $q2->whereNull('kategori')
-                            ->orWhere('kategori', '!=', $rombel->kelompok_gender);
-                    });
-                })
-                ->get();
+            $tidakSesuai = $targetSt->filter(function ($st) use ($rombel) {
+                $kategori = strtolower(trim($st->siswa?->kategori ?? ''));
+                return $kategori !== $rombel->kelompok_gender;
+            });
 
             if ($tidakSesuai->isNotEmpty()) {
                 return response()->json([
@@ -180,7 +227,7 @@ class PenempatanSiswaController extends Controller
 
             $updated = SiswaTahun::where('tahun_ajaran_id', $tahunId)
                 ->whereIn('id', $targetSt->pluck('id'))
-                ->update(['rombel_id' => $rombelId]);
+                ->update(['rombel_id' => $rombelId, 'jenjang_id' => $rombel->jenjang_id]);
 
             // Sinkronkan ke tabel master siswa
             if ($updated > 0 && $rombel) {

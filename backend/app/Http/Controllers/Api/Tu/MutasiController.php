@@ -3,9 +3,13 @@
 namespace App\Http\Controllers\Api\Tu;
 
 use App\Http\Controllers\Controller;
+use App\Models\Rombel;
+use App\Models\SiswaTahun;
+use App\Models\TahunAjaran;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class MutasiController extends Controller
 {
@@ -30,7 +34,11 @@ class MutasiController extends Controller
         if ($jenjangIds !== null) {
             $query->where(function ($q) use ($jenjangIds) {
                 $q->whereIn('rombel_asal.jenjang_id', $jenjangIds)
-                  ->orWhereIn('rombel_tujuan.jenjang_id', $jenjangIds);
+                  ->orWhereIn('rombel_tujuan.jenjang_id', $jenjangIds)
+                  ->orWhere(function ($g) use ($jenjangIds) {
+                      $g->where('mutasi.jenis', 'guru')
+                        ->whereIn('mutasi.target_id', DB::table('users')->whereIn('jenjang_id', $jenjangIds)->select('id'));
+                  });
             });
         }
 
@@ -65,59 +73,76 @@ class MutasiController extends Controller
         ]);
 
         $user = $request->user();
-
-        // Validasi siswa milik jenjang pengguna
         $siswa = DB::table('siswa')->where('id', $request->siswa_id)->first();
-        if (!$siswa) {
+        if (!$siswa || !SiswaTahun::untukUser($user)->where('siswa_id', $request->siswa_id)->exists()) {
             return response()->json(['success' => false, 'message' => 'Siswa tidak ditemukan.'], 404);
-        }
-
-        if ($user && !$user->isSuperadmin()) {
-            $range = $user->kelasRange();
-            if ($siswa->kelas < $range['min'] || $siswa->kelas > $range['max']) {
-                return response()->json(['success' => false, 'message' => 'Siswa di luar jenjang sekolah Anda.'], 403);
-            }
         }
 
         if ($request->tipe_mutasi === 'pindah_rombel') {
             $rombelTujuan = DB::table('rombel')->where('id', $request->rombel_tujuan_id)->first();
-            if (!$rombelTujuan || ($user && !$user->bolehJenjang($rombelTujuan->jenjang_id))) {
-                return response()->json(['success' => false, 'message' => 'Rombel tujuan di luar jenjang Anda.'], 403);
+            if (!$rombelTujuan || !$user->bolehJenjang($rombelTujuan->jenjang_id)) {
+                return response()->json(['success' => false, 'message' => 'Rombel tujuan tidak ditemukan.'], 404);
             }
+
+            $penempatan = DB::table('siswa_tahun')
+                ->where('siswa_id', $request->siswa_id)
+                ->where('tahun_ajaran_id', $rombelTujuan->tahun_ajaran_id)
+                ->first();
+            if (!$penempatan) {
+                return response()->json(['success' => false, 'message' => 'Siswa tidak punya data pada tahun ajaran rombel tujuan.'], 422);
+            }
+
+            if ($penempatan->jenjang_id !== null && (int)$penempatan->jenjang_id !== (int)$rombelTujuan->jenjang_id) {
+                return response()->json(['success' => false, 'message' => 'Rombel tujuan beda jenjang dengan siswa.'], 422);
+            }
+
+            if (in_array($rombelTujuan->kelompok_gender, ['ikhwan', 'akhwat'], true) && $siswa->kategori !== $rombelTujuan->kelompok_gender) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kategori siswa tidak sesuai dengan rombel ' . ucfirst($rombelTujuan->kelompok_gender) . ' (kategori berbeda atau belum diisi).'
+                ], 422);
+            }
+
+            $rombelAsalId = $penempatan->rombel_id;
+        } else {
+            $penempatan = DB::table('siswa_tahun')
+                ->join('tahun_ajaran', 'tahun_ajaran.id', '=', 'siswa_tahun.tahun_ajaran_id')
+                ->where('siswa_tahun.siswa_id', $request->siswa_id)
+                ->where('tahun_ajaran.aktif', 1)
+                ->select('siswa_tahun.*')
+                ->first();
+            if (!$penempatan) {
+                return response()->json(['success' => false, 'message' => 'Siswa tidak punya data pada tahun ajaran aktif.'], 422);
+            }
+
+            $rombelAsalId = $penempatan->rombel_id;
         }
 
         DB::beginTransaction();
         try {
-            // Cari rombel asal siswa
-            $penempatan = DB::table('siswa_tahun')  // ✅ fix
-                ->where('siswa_id', $request->siswa_id)
-                ->orderByDesc('id')
-                ->first();
-
-            $rombelAsalId = $penempatan?->rombel_id;
-
             if ($request->tipe_mutasi === 'pindah_rombel') {
-                DB::table('siswa_tahun')  // ✅ fix
-                    ->where('siswa_id', $request->siswa_id)
-                    ->update(['rombel_id' => $request->rombel_tujuan_id]);
-
-                $rombelTujuan = DB::table('rombel')->where('id', $request->rombel_tujuan_id)->first();
-                if ($rombelTujuan) {
-                    DB::table('siswa')
-                        ->where('id', $request->siswa_id)
-                        ->update([
-                            'kelas' => $rombelTujuan->tingkat_kelas,
-                            'sub' => $rombelTujuan->sub_nama,
-                        ]);
-                }
-            } else {
-                DB::table('siswa_tahun')  // ✅ fix
-                    ->where('siswa_id', $request->siswa_id)
-                    ->delete();
+                DB::table('siswa_tahun')
+                    ->where('id', $penempatan->id)
+                    ->update([
+                        'rombel_id'  => $request->rombel_tujuan_id,
+                        'jenjang_id' => $rombelTujuan->jenjang_id,
+                        'updated_at' => now(),
+                    ]);
 
                 DB::table('siswa')
                     ->where('id', $request->siswa_id)
-                    ->update(['status' => 'mutasi']);
+                    ->update([
+                        'kelas' => $rombelTujuan->tingkat_kelas,
+                        'sub'   => $rombelTujuan->sub_nama,
+                    ]);
+            } else {
+                DB::table('siswa_tahun')
+                    ->where('id', $penempatan->id)
+                    ->update([
+                        'status'       => 'MUTASI',
+                        'is_processed' => 1,
+                        'updated_at'   => now(),
+                    ]);
             }
 
             DB::table('mutasi')->insert([
@@ -138,15 +163,14 @@ class MutasiController extends Controller
             return response()->json(['success' => true, 'message' => 'Mutasi siswa berhasil dicatat.']);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            Log::error('Mutasi siswa: '.$e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Gagal memproses mutasi.'], 500);
         }
     }
 
     public function rombelAktif(Request $request)
     {
-        $tahunAjaranAktif = DB::table('tahun_ajaran')
-            ->where('aktif', 1)
-            ->value('id');
+        $tahunAjaranAktif = TahunAjaran::getAktif()?->id;
 
         $user = $request->user();
         $jenjangIds = $user ? $user->jenjangIds() : null;
@@ -161,11 +185,10 @@ class MutasiController extends Controller
 
         return response()->json([
             'success' => true,
-            'debug_tahun_ajaran_id' => $tahunAjaranAktif,
-            'total' => count($data),
-            'data' => $data
-    ]);
-}
+            'total'   => count($data),
+            'data'    => $data,
+        ]);
+    }
 
     // Proses mutasi guru
     public function mutasiGuru(Request $request)
@@ -174,12 +197,28 @@ class MutasiController extends Controller
             'guru_id'          => 'required|numeric',
             'tipe_mutasi'      => 'required|in:pindah_rombel,pindah_sekolah',
             'rombel_asal_id'   => 'required_if:tipe_mutasi,pindah_rombel|numeric|nullable',
-            'rombel_tujuan_id' => 'required_if:tipe_mutasi,pindah_rombel|numeric|nullable', // ✅ fix: typo numreic
-            'mapel_id'         => 'required_if:tipe_mutasi,pindah_rombel|numeric|nullable', // ✅ fix: typo numreic
+            'rombel_tujuan_id' => 'required_if:tipe_mutasi,pindah_rombel|numeric|nullable',
+            'mapel_id'         => 'required_if:tipe_mutasi,pindah_rombel|numeric|nullable',
             'sekolah_tujuan'   => 'required_if:tipe_mutasi,pindah_sekolah|string|nullable',
             'tanggal_mutasi'   => 'required|date',
             'keterangan'       => 'nullable|string',
         ]);
+
+        $guru = DB::table('users')->where('id', $request->guru_id)->where('role', 'guru')->first();
+        if (!$guru || !$request->user()->bolehJenjang($guru->jenjang_id)) {
+            return response()->json(['success' => false, 'message' => 'Guru tidak ditemukan.'], 404);
+        }
+
+        if ($request->tipe_mutasi === 'pindah_rombel') {
+            $rombelAsal = Rombel::untukUser($request->user())->find($request->rombel_asal_id);
+            if (!$rombelAsal) {
+                return response()->json(['success' => false, 'message' => 'Rombel asal tidak ditemukan.'], 404);
+            }
+            $rombelTujuan = Rombel::untukUser($request->user())->find($request->rombel_tujuan_id);
+            if (!$rombelTujuan) {
+                return response()->json(['success' => false, 'message' => 'Rombel tujuan tidak ditemukan.'], 404);
+            }
+        }
 
         DB::beginTransaction();
         try {
@@ -217,7 +256,8 @@ class MutasiController extends Controller
             return response()->json(['success' => true, 'message' => 'Mutasi guru berhasil dicatat.']);
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            Log::error('Mutasi guru: '.$e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Gagal memproses mutasi.'], 500);
         }
     }
 }

@@ -219,7 +219,7 @@ export default function SidebarAdminTu() {
               <FaChevronDown className={`text-[10px] transition-transform duration-200 ${openDropdown === "kenaikan" ? "rotate-180" : ""}`} />
             </button>
             <div className={`overflow-hidden transition-all duration-300 ${openDropdown === "kenaikan" ? "max-h-60 opacity-100 mt-1 space-y-1" : "max-h-0 opacity-0"}`}>
-              <Link to="/dashboardtusd/promosi" className={subLinkClass("/dashboardtusd/promosi")}>Promosi Siswa</Link>
+              <Link to="/dashboardtusd/promosi" className={subLinkClass("/dashboardtusd/promosi")}>Kenaikan Kelas</Link>
               <Link to="/dashboardtusd/penempatan-siswa" className={subLinkClass("/dashboardtusd/penempatan-siswa")}>Penempatan</Link>
               <Link to="/dashboardtusd/wali-kelas" className={subLinkClass("/dashboardtusd/wali-kelas")}>Wali Kelas</Link>
             </div>

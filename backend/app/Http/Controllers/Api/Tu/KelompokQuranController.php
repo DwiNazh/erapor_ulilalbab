@@ -11,65 +11,84 @@ use App\Models\Siswa;
 use App\Models\KelompokQuran;
 use App\Models\KelompokQuranAnggota;
 use App\Models\TahunAjaran;
+use App\Models\SiswaTahun;
 
 class KelompokQuranController extends Controller
 {
+    private function guruBoleh($guruId): bool
+    {
+        $user = request()->user();
+        $guru = User::where('id', $guruId)->where('role', 'guru')->first();
+        return $guru && $user && $user->bolehJenjang($guru->jenjang_id);
+    }
+
+    private function kelompokBoleh(KelompokQuran $k): bool
+    {
+        return $this->guruBoleh($k->guru_id);
+    }
+
     /*
     |--------------------------------------------------------------------------
     | LIST KELOMPOK
     |--------------------------------------------------------------------------
     |*/
-/*
-    |--------------------------------------------------------------------------
-    | LIST KELOMPOK (FIXED KONTINUITAS KELAS AKTIF)
-    |--------------------------------------------------------------------------
-    |*/
+    /*
+        |--------------------------------------------------------------------------
+        | LIST KELOMPOK (FIXED KONTINUITAS KELAS AKTIF)
+        |--------------------------------------------------------------------------
+        |*/
     public function index(Request $request)
     {
         $tahunId = $request->tahun_ajaran_id;
-        $semester = ucfirst(strtolower(trim($request->semester))); 
+        $semester = ucfirst(strtolower(trim($request->semester)));
 
         $kelompok = KelompokQuran::with(['guru:id,name'])
-        ->where('tahun_ajaran_id', $tahunId)
-        ->where('semester', $semester)
-        ->orderBy('label')
-        ->get()
-        ->map(function ($k) use ($tahunId) {
-            // Ambil anggota kelompok dan gabungkan dengan tingkat kelas aktif dari siswa_tahun
-            $anggotaSiswa = DB::table('anggota_kelompok_quran')
-                ->join('siswa', 'anggota_kelompok_quran.siswa_id', '=', 'siswa.id')
-                ->join('siswa_tahun', function($join) use ($tahunId) {
+            ->whereHas('guru', function ($q) use ($request) {
+                $ids = $request->user()->jenjangIds();
+                if ($ids !== null) {
+                    $q->whereIn('jenjang_id', $ids);
+                }
+            })
+            ->where('tahun_ajaran_id', $tahunId)
+            ->where('semester', $semester)
+            ->orderBy('label')
+            ->get()
+            ->map(function ($k) use ($tahunId) {
+                // Ambil anggota kelompok dan gabungkan dengan tingkat kelas aktif dari siswa_tahun
+                $anggotaSiswa = DB::table('anggota_kelompok_quran')
+                    ->join('siswa', 'anggota_kelompok_quran.siswa_id', '=', 'siswa.id')
+                    ->join('siswa_tahun', function ($join) use ($tahunId) {
                     $join->on('siswa.id', '=', 'siswa_tahun.siswa_id')
-                         ->where('siswa_tahun.tahun_ajaran_id', '=', $tahunId);
+                        ->where('siswa_tahun.tahun_ajaran_id', '=', $tahunId);
                 })
-                ->leftJoin('rombel', 'siswa_tahun.rombel_id', '=', 'rombel.id')
-                ->where('anggota_kelompok_quran.kelompok_quran_id', $k->id)
-                ->select([
-                    'siswa.id',
-                    'siswa.nama',
-                    'siswa.nis',
-                    'siswa.nisn',
-                    DB::raw("CONCAT(rombel.tingkat_kelas, rombel.sub_nama) as kelas_aktif")
-                ])
-                ->orderBy('siswa.nama', 'asc')
-                ->get();
+                    ->leftJoin('rombel', 'siswa_tahun.rombel_id', '=', 'rombel.id')
+                    ->where('anggota_kelompok_quran.kelompok_quran_id', $k->id)
+                    ->select([
+                        'siswa.id',
+                        'siswa.nama',
+                        'siswa.nis',
+                        'siswa.nisn',
+                        DB::raw("CONCAT(rombel.tingkat_kelas, rombel.sub_nama) as kelas_aktif")
+                    ])
+                    ->orderBy('siswa.nama', 'asc')
+                    ->get();
 
-            return [
-                'id' => $k->id,
-                'label' => $k->label,
-                'guru_id' => $k->guru_id,
-                'guru' => $k->guru,
-                'anggota' => $anggotaSiswa->map(function ($a) {
-                    return [
-                        'id' => $a->id,
-                        'nama' => $a->nama,
-                        'kelas' => $a->kelas_aktif, // Menggunakan kelas aktif tahun ajaran berjalan
-                        'nis' => $a->nis,
-                        'nisn' => $a->nisn,
-                    ];
-                }),
-            ];
-        });
+                return [
+                    'id' => $k->id,
+                    'label' => $k->label,
+                    'guru_id' => $k->guru_id,
+                    'guru' => $k->guru,
+                    'anggota' => $anggotaSiswa->map(function ($a) {
+                        return [
+                            'id' => $a->id,
+                            'nama' => $a->nama,
+                            'kelas' => $a->kelas_aktif, // Menggunakan kelas aktif tahun ajaran berjalan
+                            'nis' => $a->nis,
+                            'nisn' => $a->nisn,
+                        ];
+                    }),
+                ];
+            });
 
         return response()->json([
             'success' => true,
@@ -98,6 +117,10 @@ class KelompokQuranController extends Controller
             return response()->json([
                 'message' => 'User bukan guru'
             ], 422);
+        }
+
+        if (!$this->guruBoleh($request->guru_id)) {
+            return response()->json(['success' => false, 'message' => 'Guru tidak ditemukan.'], 404);
         }
 
         // Standarkan format sebelum melakukan pengecekan data di database
@@ -141,15 +164,19 @@ class KelompokQuranController extends Controller
         ]);
     }
 
- /*
-    |--------------------------------------------------------------------------
-    | HAPUS KELOMPOK
-    |--------------------------------------------------------------------------
-    |*/
+    /*
+       |--------------------------------------------------------------------------
+       | HAPUS KELOMPOK
+       |--------------------------------------------------------------------------
+       |*/
     public function destroy($id)
     {
         // Temukan data kelompok berdasarkan ID
         $kelompok = KelompokQuran::findOrFail($id);
+
+        if (!$this->kelompokBoleh($kelompok)) {
+            return response()->json(['success' => false, 'message' => 'Kelompok tidak ditemukan.'], 404);
+        }
 
         // Bersihkan data menggunakan DB::table untuk menghindari dependensi Model Anggota
         DB::transaction(function () use ($kelompok) {
@@ -163,66 +190,76 @@ class KelompokQuranController extends Controller
         ]);
     }
 
-/*
-|--------------------------------------------------------------------------
-| TAMBAH ANGGOTA (PLOTTING SISWA)
-|--------------------------------------------------------------------------
-*/
-public function tambahAnggota(Request $request, $id)
-{
-    $request->validate([
-        'siswa_ids'   => 'required|array',
-        'siswa_ids.*' => 'exists:siswa,id',
-    ]);
+    /*
+    |--------------------------------------------------------------------------
+    | TAMBAH ANGGOTA (PLOTTING SISWA)
+    |--------------------------------------------------------------------------
+    |*/
+    public function tambahAnggota(Request $request, $id)
+    {
+        $request->validate([
+            'siswa_ids' => 'required|array',
+            'siswa_ids.*' => 'exists:siswa,id',
+        ]);
 
-    $kelompok = KelompokQuran::findOrFail($id);
+        $kelompok = KelompokQuran::findOrFail($id);
 
-    // Hitung anggota saat ini
-    $jumlahSaatIni = DB::table('anggota_kelompok_quran')
-        ->where('kelompok_quran_id', $kelompok->id)
-        ->count();
-
-    // Hitung siswa baru yang belum ada di kelompok manapun (yang benar-benar akan diinsert)
-    $siswaBaruIds = [];
-    foreach ($request->siswa_ids as $siswaId) {
-        $sudahAda = DB::table('anggota_kelompok_quran')
-            ->join('kelompok_quran', 'anggota_kelompok_quran.kelompok_quran_id', '=', 'kelompok_quran.id')
-            ->where('anggota_kelompok_quran.siswa_id', $siswaId)
-            ->where('kelompok_quran.tahun_ajaran_id', $kelompok->tahun_ajaran_id)
-            ->where('kelompok_quran.semester', $kelompok->semester)
-            ->exists();
-
-        if (!$sudahAda) {
-            $siswaBaruIds[] = $siswaId;
+        if (!$this->kelompokBoleh($kelompok)) {
+            return response()->json(['success' => false, 'message' => 'Kelompok tidak ditemukan.'], 404);
         }
-    }
 
-    // Cek apakah total melebihi batas
-    $KAPASITAS_MAKS = 15;
-    if (($jumlahSaatIni + count($siswaBaruIds)) > $KAPASITAS_MAKS) {
-        $sisaBisa = $KAPASITAS_MAKS - $jumlahSaatIni;
+        $idsUnik = array_values(array_unique($request->siswa_ids));
+        $valid = SiswaTahun::untukUser($request->user())->where('tahun_ajaran_id', $kelompok->tahun_ajaran_id)->whereIn('siswa_id', $idsUnik)->distinct()->count('siswa_id');
+        if ($valid !== count($idsUnik)) {
+            return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda atau tanpa data tahun ajaran ini.'], 403);
+        }
+
+        // Hitung anggota saat ini
+        $jumlahSaatIni = DB::table('anggota_kelompok_quran')
+            ->where('kelompok_quran_id', $kelompok->id)
+            ->count();
+
+        // Hitung siswa baru yang belum ada di kelompok manapun (yang benar-benar akan diinsert)
+        $siswaBaruIds = [];
+        foreach ($request->siswa_ids as $siswaId) {
+            $sudahAda = DB::table('anggota_kelompok_quran')
+                ->join('kelompok_quran', 'anggota_kelompok_quran.kelompok_quran_id', '=', 'kelompok_quran.id')
+                ->where('anggota_kelompok_quran.siswa_id', $siswaId)
+                ->where('kelompok_quran.tahun_ajaran_id', $kelompok->tahun_ajaran_id)
+                ->where('kelompok_quran.semester', $kelompok->semester)
+                ->exists();
+
+            if (!$sudahAda) {
+                $siswaBaruIds[] = $siswaId;
+            }
+        }
+
+        // Cek apakah total melebihi batas
+        $KAPASITAS_MAKS = 15;
+        if (($jumlahSaatIni + count($siswaBaruIds)) > $KAPASITAS_MAKS) {
+            $sisaBisa = $KAPASITAS_MAKS - $jumlahSaatIni;
+            return response()->json([
+                'success' => false,
+                'message' => "Kelompok sudah penuh atau melebihi kapasitas. Sisa slot: {$sisaBisa} siswa."
+            ], 422);
+        }
+
+        DB::transaction(function () use ($siswaBaruIds, $kelompok) {
+            foreach ($siswaBaruIds as $siswaId) {
+                DB::table('anggota_kelompok_quran')->insert([
+                    'kelompok_quran_id' => $kelompok->id,
+                    'siswa_id' => $siswaId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        });
+
         return response()->json([
-            'success' => false,
-            'message' => "Kelompok sudah penuh atau melebihi kapasitas. Sisa slot: {$sisaBisa} siswa."
-        ], 422);
+            'success' => true,
+            'message' => count($siswaBaruIds) . ' siswa berhasil dimasukkan ke dalam kelompok'
+        ]);
     }
-
-    DB::transaction(function () use ($siswaBaruIds, $kelompok) {
-        foreach ($siswaBaruIds as $siswaId) {
-            DB::table('anggota_kelompok_quran')->insert([
-                'kelompok_quran_id' => $kelompok->id,
-                'siswa_id'          => $siswaId,
-                'created_at'        => now(),
-                'updated_at'        => now(),
-            ]);
-        }
-    });
-
-    return response()->json([
-        'success' => true,
-        'message' => count($siswaBaruIds) . ' siswa berhasil dimasukkan ke dalam kelompok'
-    ]);
-}
 
     /*
     |--------------------------------------------------------------------------
@@ -231,6 +268,11 @@ public function tambahAnggota(Request $request, $id)
     |*/
     public function hapusAnggota($kelompokId, $siswaId)
     {
+        $kelompok = KelompokQuran::findOrFail($kelompokId);
+        if (!$this->kelompokBoleh($kelompok)) {
+            return response()->json(['success' => false, 'message' => 'Kelompok tidak ditemukan.'], 404);
+        }
+
         // Hapus baris siswa dari tabel jembatan secara langsung
         DB::table('anggota_kelompok_quran')
             ->where('kelompok_quran_id', $kelompokId)
@@ -243,74 +285,85 @@ public function tambahAnggota(Request $request, $id)
         ]);
     }
 
-/*
-|--------------------------------------------------------------------------
-| PINDAH KELOMPOK
-|--------------------------------------------------------------------------
-*/
-public function pindahKelompok(Request $request)
-{
-    $request->validate([
-        'siswa_id'         => 'required|exists:siswa,id',
-        'dari_kelompok_id' => 'required|exists:kelompok_quran,id',
-        'ke_kelompok_id'   => 'required|exists:kelompok_quran,id|different:dari_kelompok_id',
-    ]);
+    /*
+    |--------------------------------------------------------------------------
+    | PINDAH KELOMPOK
+    |--------------------------------------------------------------------------
+    |*/
+    public function pindahKelompok(Request $request)
+    {
+        $request->validate([
+            'siswa_id' => 'required|exists:siswa,id',
+            'dari_kelompok_id' => 'required|exists:kelompok_quran,id',
+            'ke_kelompok_id' => 'required|exists:kelompok_quran,id|different:dari_kelompok_id',
+        ]);
 
-    $adaDiAsal = DB::table('anggota_kelompok_quran')
-        ->where('kelompok_quran_id', $request->dari_kelompok_id)
-        ->where('siswa_id', $request->siswa_id)
-        ->exists();
+        $dariKelompok = KelompokQuran::find($request->dari_kelompok_id);
+        $keKelompok = KelompokQuran::find($request->ke_kelompok_id);
 
-    if (!$adaDiAsal) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Siswa tidak ditemukan di kelompok asal'
-        ], 422);
-    }
+        if (!$dariKelompok || !$this->kelompokBoleh($dariKelompok) || !$keKelompok || !$this->kelompokBoleh($keKelompok)) {
+            return response()->json(['success' => false, 'message' => 'Kelompok tidak ditemukan.'], 404);
+        }
 
-    $sudahDiTujuan = DB::table('anggota_kelompok_quran')
-        ->where('kelompok_quran_id', $request->ke_kelompok_id)
-        ->where('siswa_id', $request->siswa_id)
-        ->exists();
+        if ($dariKelompok->tahun_ajaran_id !== $keKelompok->tahun_ajaran_id || $dariKelompok->semester !== $keKelompok->semester) {
+            return response()->json(['success' => false, 'message' => 'Tahun ajaran dan semester kelompok harus sama.'], 422);
+        }
 
-    if ($sudahDiTujuan) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Siswa sudah terdaftar di kelompok tujuan'
-        ], 422);
-    }
-
-    // Cek kapasitas kelompok tujuan
-    $jumlahTujuan = DB::table('anggota_kelompok_quran')
-        ->where('kelompok_quran_id', $request->ke_kelompok_id)
-        ->count();
-
-    if ($jumlahTujuan >= 15) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Kelompok tujuan sudah penuh (maksimal 15 siswa)'
-        ], 422);
-    }
-
-    DB::transaction(function () use ($request) {
-        DB::table('anggota_kelompok_quran')
+        $adaDiAsal = DB::table('anggota_kelompok_quran')
             ->where('kelompok_quran_id', $request->dari_kelompok_id)
             ->where('siswa_id', $request->siswa_id)
-            ->delete();
+            ->exists();
 
-        DB::table('anggota_kelompok_quran')->insert([
-            'kelompok_quran_id' => $request->ke_kelompok_id,
-            'siswa_id'          => $request->siswa_id,
-            'created_at'        => now(),
-            'updated_at'        => now(),
+        if (!$adaDiAsal) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Siswa tidak ditemukan di kelompok asal'
+            ], 422);
+        }
+
+        $sudahDiTujuan = DB::table('anggota_kelompok_quran')
+            ->where('kelompok_quran_id', $request->ke_kelompok_id)
+            ->where('siswa_id', $request->siswa_id)
+            ->exists();
+
+        if ($sudahDiTujuan) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Siswa sudah terdaftar di kelompok tujuan'
+            ], 422);
+        }
+
+        // Cek kapasitas kelompok tujuan
+        $jumlahTujuan = DB::table('anggota_kelompok_quran')
+            ->where('kelompok_quran_id', $request->ke_kelompok_id)
+            ->count();
+
+        if ($jumlahTujuan >= 15) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kelompok tujuan sudah penuh (maksimal 15 siswa)'
+            ], 422);
+        }
+
+        DB::transaction(function () use ($request) {
+            DB::table('anggota_kelompok_quran')
+                ->where('kelompok_quran_id', $request->dari_kelompok_id)
+                ->where('siswa_id', $request->siswa_id)
+                ->delete();
+
+            DB::table('anggota_kelompok_quran')->insert([
+                'kelompok_quran_id' => $request->ke_kelompok_id,
+                'siswa_id' => $request->siswa_id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Siswa berhasil dipindahkan'
         ]);
-    });
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Siswa berhasil dipindahkan'
-    ]);
-}
+    }
 
     /*
     |--------------------------------------------------------------------------
@@ -328,6 +381,12 @@ public function pindahKelompok(Request $request)
 
         KelompokQuran::where('tahun_ajaran_id', $request->tahun_ajaran_id)
             ->where('semester', $semester)
+            ->whereHas('guru', function ($q) use ($request) {
+                $ids = $request->user()->jenjangIds();
+                if ($ids !== null) {
+                    $q->whereIn('jenjang_id', $ids);
+                }
+            })
             ->update([
                 'aktif' => true,
             ]);
@@ -357,10 +416,10 @@ public function pindahKelompok(Request $request)
         return response()->json([
             'success' => true,
             'data' => [
-                'id'             => $tahunAktif->id,
-                'nama'           => $tahunAktif->nama,
+                'id' => $tahunAktif->id,
+                'nama' => $tahunAktif->nama,
                 'semester_aktif' => $tahunAktif->semester_aktif,
-                'status'         => $tahunAktif->status,
+                'status' => $tahunAktif->status,
             ]
         ]);
     }
@@ -387,6 +446,7 @@ public function pindahKelompok(Request $request)
             ->join('siswa', 'siswa_tahun.siswa_id', '=', 'siswa.id') // ← tabel 'siswa', bukan 'siswas'
             ->leftJoin('rombel', 'siswa_tahun.rombel_id', '=', 'rombel.id')
             ->where('siswa_tahun.tahun_ajaran_id', $tahunId)
+            ->where('siswa_tahun.status', 'AKTIF')
             ->whereNotIn('siswa_tahun.siswa_id', $siswaSudahPlotIds);
 
         if ($user && $user->jenjangIds() !== null) {
@@ -397,12 +457,12 @@ public function pindahKelompok(Request $request)
         }
 
         $siswaBelumPlot = $query->select([
-                'siswa.id as id',
-                'siswa.nama',        // ← kolom nama di tabel 'siswa'
-                'siswa.nis',
-                'rombel.tingkat_kelas as kelas_digit',
-                'rombel.sub_nama as kelas_nama'
-            ])
+            'siswa.id as id',
+            'siswa.nama',        // ← kolom nama di tabel 'siswa'
+            'siswa.nis',
+            'rombel.tingkat_kelas as kelas_digit',
+            'rombel.sub_nama as kelas_nama'
+        ])
             ->orderBy('rombel.tingkat_kelas', 'asc')
             ->orderBy('siswa.nama', 'asc')
             ->get();
@@ -412,8 +472,4 @@ public function pindahKelompok(Request $request)
             'data' => $siswaBelumPlot
         ]);
     }
-
-
-
-
 }

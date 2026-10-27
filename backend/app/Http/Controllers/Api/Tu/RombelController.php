@@ -23,7 +23,7 @@ class RombelController extends Controller
      */
     private function getTahunBerikutnya()
     {
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return null;
@@ -147,7 +147,7 @@ class RombelController extends Controller
             $gender = 'campuran';
         }
 
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return response()->json([

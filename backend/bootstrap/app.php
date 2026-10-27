@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => RoleMiddleware::class,
             'auth.siswa' => \App\Http\Middleware\AuthSiswa::class,
+            'check.finalisasi' => \App\Http\Middleware\CheckTahunAjaranFinal::class,
         ]);
 
         // SPA cookie authentication

@@ -20,7 +20,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import toast from "react-hot-toast";
 import api from "../../api";
-import { KATEGORI_LABEL, perluKategori, daftarKelas } from "../../utils/rombel";
+import { KATEGORI_LABEL, perluKategori, daftarKelas, getSubkelasLabel } from "../../utils/rombel";
 import { useAuth } from "../../context/AuthContext";
 
 export default function DataSiswa() {
@@ -59,18 +59,24 @@ export default function DataSiswa() {
       setTahunAktif(aktif?.nama || "");
 
       const siswaData = resSiswa.data?.data || [];
+      console.log("Data siswa dari API:", siswaData);
+      console.log("Contoh data siswa:", siswaData[0]);
       setDataSiswa(Array.isArray(siswaData) ? siswaData : []);
 
       // Tentukan default tahun ajaran: jika tahun aktif sudah difinalisasi atau ada tahun terbaru yang memiliki data
       let defaultTahun = aktif?.nama || "";
       if (allTahun.length > 0) {
-        const tahunDenganData = [...new Set(siswaData.map((s) => s.tahun_ajaran))];
+        const tahunDenganData = [
+          ...new Set(siswaData.map((s) => s.tahun_ajaran)),
+        ];
         const sortedTahun = [...allTahun].sort((a, b) => b.id - a.id);
         const tahunTerbaru = sortedTahun[0]?.nama;
         if (
           tahunTerbaru &&
           tahunDenganData.includes(tahunTerbaru) &&
-          (!defaultTahun || aktif?.finalized_at || aktif?.kenaikan_kelas_finalized_at)
+          (!defaultTahun ||
+            aktif?.finalized_at ||
+            aktif?.kenaikan_kelas_finalized_at)
         ) {
           defaultTahun = tahunTerbaru;
         }
@@ -93,7 +99,9 @@ export default function DataSiswa() {
           x.siswa_id === siswaId ? { ...x, kategori: nilai } : x,
         ),
       );
-      toast.success("Kategori disimpan");
+      toast.success(
+        `Kategori disimpan. Siswa dipindahkan ke kelompok ${nilai === "ikhwan" ? "Ikhwan" : "Akhwat"}.`
+      );
     } catch (err) {
       toast.error(err.response?.data?.message || "Gagal menyimpan kategori", {
         duration: 6000,
@@ -111,21 +119,17 @@ export default function DataSiswa() {
   // Hanya hitung siswa kelas >=4 yang belum diisi kategori
   const jumlahTanpaKategori = new Set(
     siswaFiltered
-      .filter((s) => perluKategori(Number(s.tingkat_kelas || s.kelas || 0)) && !s.kategori)
+      .filter(
+        (s) =>
+          perluKategori(Number(s.tingkat_kelas || s.kelas || 0)) && !s.kategori,
+      )
       .map((s) => s.siswa_id),
   ).size;
 
   const dataTerstruktur = {};
   siswaFiltered.forEach((s) => {
     const kelas = String(s.tingkat_kelas || s.kelas || "-");
-    const subDasar = s.sub_nama || s.sub_kelas || s.sub || "Reguler";
-    const g = s.kategori; // "ikhwan", "akhwat", atau "" (kosong)
-    // Pisah sub-kelas berdasarkan kategori HANYA untuk kelas 4 ke atas
-    const kelasNum = Number(kelas);
-    const sub =
-      perluKategori(kelasNum) && g && g !== "campuran"
-        ? `${subDasar} ${KATEGORI_LABEL[g]}`
-        : subDasar;
+    const sub = getSubkelasLabel(s);
 
     if (!dataTerstruktur[kelas]) dataTerstruktur[kelas] = {};
     if (!dataTerstruktur[kelas][sub]) dataTerstruktur[kelas][sub] = [];
@@ -156,7 +160,7 @@ export default function DataSiswa() {
     })
     .map((s) => {
       const kelas = String(s.tingkat_kelas || s.kelas || "-");
-      const sub = s.sub_nama || s.sub_kelas || s.sub || "Reguler";
+      const sub = getSubkelasLabel(s);
       return {
         id: s.siswa_id || s.id,
         nama: s.nama || s.nama_user || "-",
@@ -334,8 +338,18 @@ export default function DataSiswa() {
                             {s.nis}
                           </td>
                           <td className="p-4 text-center">
-                            <span className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-xs font-bold">
-                              Kelas {s.kelas}
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-bold inline-flex items-center gap-1.5 ${
+                                s.sub_kelas?.toLowerCase().includes("ikhwan")
+                                  ? "bg-sky-100 text-sky-700"
+                                  : s.sub_kelas?.toLowerCase().includes("akhwat")
+                                  ? "bg-rose-100 text-rose-700"
+                                  : s.sub_kelas?.toLowerCase().includes("belum")
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-indigo-100 text-indigo-700"
+                              }`}
+                            >
+                              Kelas {s.kelas} • {s.sub_kelas}
                             </span>
                           </td>
                         </tr>
@@ -364,7 +378,8 @@ export default function DataSiswa() {
                   className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
                 >
                   {daftarKelas(jenjang).map((kelas) => {
-                    const warna = warnaKelas[kelas] ?? warnaKelas[((kelas - 1) % 6) + 1];
+                    const warna =
+                      warnaKelas[kelas] ?? warnaKelas[((kelas - 1) % 6) + 1];
                     const adaBelumPromosi =
                       dataTerstruktur[String(kelas)] &&
                       Object.values(dataTerstruktur[String(kelas)]).some(
@@ -416,29 +431,82 @@ export default function DataSiswa() {
                     <FaArrowLeft /> Kembali ke Daftar Kelas
                   </button>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                    {Object.keys(
-                      dataTerstruktur[String(kelasDipilih)] || {},
-                    ).map((sub) => (
-                      <div
-                        key={sub}
-                        onClick={() => setSubDipilih(sub)}
-                        className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:border-indigo-500 cursor-pointer text-center transition-all"
-                      >
-                        <div className="w-10 h-10 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto mb-3">
-                          <FaUser />
-                        </div>
-                        <h4 className="font-bold text-slate-700 text-xl">
-                          {sub}
-                        </h4>
-                        <p className="text-xs text-slate-400">
-                          {
-                            (dataTerstruktur[String(kelasDipilih)][sub] || [])
-                              .length
-                          }{" "}
-                          Siswa
-                        </p>
-                      </div>
-                    ))}
+                    {Object.keys(dataTerstruktur[String(kelasDipilih)] || {})
+                      .sort((a, b) => {
+                        if (a.includes("Belum Ditentukan")) return 1;
+                        if (b.includes("Belum Ditentukan")) return -1;
+                        return a.localeCompare(b);
+                      })
+                      .map((sub) => {
+                        const isIkhwan = sub.toLowerCase().includes("ikhwan");
+                        const isAkhwat = sub.toLowerCase().includes("akhwat");
+                        const isBelum = sub.toLowerCase().includes("belum ditentukan");
+                        const count = (
+                          dataTerstruktur[String(kelasDipilih)][sub] || []
+                        ).length;
+
+                        return (
+                          <div
+                            key={sub}
+                            onClick={() => setSubDipilih(sub)}
+                            className={`p-6 rounded-2xl border shadow-sm hover:shadow-md cursor-pointer text-center transition-all group ${
+                              isIkhwan
+                                ? "bg-white border-sky-200 hover:border-sky-500 hover:shadow-sky-100"
+                                : isAkhwat
+                                ? "bg-white border-rose-200 hover:border-rose-500 hover:shadow-rose-100"
+                                : isBelum
+                                ? "bg-amber-50/70 border-dashed border-amber-300 hover:border-amber-500 hover:shadow-amber-100"
+                                : "bg-white border-slate-200 hover:border-indigo-500"
+                            }`}
+                          >
+                            <div
+                              className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 transition-transform group-hover:scale-110 ${
+                                isIkhwan
+                                  ? "bg-sky-100 text-sky-600"
+                                  : isAkhwat
+                                  ? "bg-rose-100 text-rose-600"
+                                  : isBelum
+                                  ? "bg-amber-100 text-amber-600 animate-pulse"
+                                  : "bg-slate-100 text-slate-400"
+                              }`}
+                            >
+                              {isBelum ? (
+                                <FaExclamationTriangle size={18} />
+                              ) : (
+                                <FaUser size={18} />
+                              )}
+                            </div>
+                            <h4
+                              className={`font-bold text-lg mb-1 ${
+                                isIkhwan
+                                  ? "text-sky-900"
+                                  : isAkhwat
+                                  ? "text-rose-900"
+                                  : isBelum
+                                  ? "text-amber-800"
+                                  : "text-slate-700"
+                              }`}
+                            >
+                              {sub}
+                            </h4>
+                            <div className="flex items-center justify-center gap-2">
+                              <span
+                                className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                                  isIkhwan
+                                    ? "bg-sky-50 text-sky-700 font-bold"
+                                    : isAkhwat
+                                    ? "bg-rose-50 text-rose-700 font-bold"
+                                    : isBelum
+                                    ? "bg-amber-100 text-amber-700 font-bold"
+                                    : "bg-slate-100 text-slate-500"
+                                }`}
+                              >
+                                {count} Siswa
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                   </div>
                 </motion.div>
               )}
@@ -457,11 +525,46 @@ export default function DataSiswa() {
                     <FaArrowLeft /> Kembali ke Subkelas
                   </button>
                   <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-                    <div className="p-6 bg-slate-50 border-b flex justify-between items-center">
-                      <h2 className="font-bold text-slate-700">
-                        Daftar Siswa {kelasDipilih} {subDipilih}
-                      </h2>
+                    <div className="p-6 bg-slate-50 border-b flex flex-wrap justify-between items-center gap-3">
+                      <div className="flex items-center gap-3">
+                        {/* <h2 className="font-bold text-slate-800 text-lg">
+                          Daftar Siswa Kelas {kelasDipilih} {subDipilih}
+                        </h2>
+                        {subDipilih.toLowerCase().includes("ikhwan") && (
+                          <span className="bg-sky-100 text-sky-700 text-xs font-bold px-3 py-1 rounded-full">
+                            Kelompok Ikhwan
+                          </span>
+                        )}
+                        {subDipilih.toLowerCase().includes("akhwat") && (
+                          <span className="bg-rose-100 text-rose-700 text-xs font-bold px-3 py-1 rounded-full">
+                            Kelompok Akhwat
+                          </span>
+                        )}
+                        {subDipilih.toLowerCase().includes("belum ditentukan") && (
+                          <span className="bg-amber-100 text-amber-700 text-xs font-bold px-3 py-1 rounded-full animate-pulse">
+                            Perlu Kategori
+                          </span>
+                        )} */}
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">
+                        Total: {dataSubkelas.length} Siswa
+                      </span>
                     </div>
+
+                    {subDipilih.toLowerCase().includes("belum ditentukan") && (
+                      <div className="p-4 bg-amber-50 border-b border-amber-200 text-amber-800 text-xs flex items-center gap-2">
+                        <FaExclamationTriangle
+                          className="text-amber-500 flex-shrink-0"
+                          size={16}
+                        />
+                        <span>
+                          Siswa di bawah ini belum ditentukan kategorinya. Silakan pilih{" "}
+                          <strong>Ikhwan</strong> atau <strong>Akhwat</strong> pada kolom
+                          Kategori di bawah agar siswa otomatis dipisahkan ke kelompok yang
+                          sesuai.
+                        </span>
+                      </div>
+                    )}
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-slate-50 text-slate-400 font-bold border-b border-slate-100">

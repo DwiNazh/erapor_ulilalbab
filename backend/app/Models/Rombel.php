@@ -45,6 +45,7 @@ class Rombel extends Model
     }
 
     public function scopeUntukUser($query, $user) {
+        if (!$user) { return $query->whereRaw('1 = 0'); }
         $ids = $user->jenjangIds();
         return $ids === null ? $query : $query->whereIn('jenjang_id', $ids);
     }

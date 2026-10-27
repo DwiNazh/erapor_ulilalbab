@@ -16,21 +16,12 @@ class DataSiswaController extends Controller
     {
         $user = $request->user();
         $jenjangIds = $user ? $user->jenjangIds() : null;
-        $range = $user ? $user->kelasRange() : ['min' => 1, 'max' => 12];
 
         $query = DB::table('siswa_tahun')
             ->join('siswa', 'siswa_tahun.siswa_id', '=', 'siswa.id')
             ->leftJoin('rombel', 'siswa_tahun.rombel_id', '=', 'rombel.id')
             ->join('tahun_ajaran', 'siswa_tahun.tahun_ajaran_id', '=', 'tahun_ajaran.id')
-            ->when($jenjangIds !== null, function ($q) use ($jenjangIds, $range) {
-                $q->where(function ($sub) use ($jenjangIds, $range) {
-                    $sub->whereIn('rombel.jenjang_id', $jenjangIds)
-                        ->orWhere(function ($oq) use ($range) {
-                            $oq->whereNull('siswa_tahun.rombel_id')
-                               ->whereBetween('siswa.kelas', [$range['min'], $range['max']]);
-                        });
-                });
-            })
+            ->when($jenjangIds !== null, fn ($q) => $q->whereIn('siswa_tahun.jenjang_id', $jenjangIds))
             ->select(
                 'siswa.id as siswa_id',
                 'siswa.nama',
@@ -42,6 +33,7 @@ class DataSiswaController extends Controller
                 DB::raw('COALESCE(rombel.tingkat_kelas, siswa.kelas) as tingkat_kelas'),
                 'siswa_tahun.is_processed',
                 DB::raw('COALESCE(rombel.sub_nama, siswa.sub) as sub_nama'),
+                'rombel.nama_rombel',
                 'tahun_ajaran.id as tahun_ajaran_id',
                 'tahun_ajaran.nama as tahun_ajaran',
                 'tahun_ajaran.aktif as tahun_aktif'

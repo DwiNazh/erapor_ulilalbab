@@ -87,9 +87,18 @@ class PenugasanGuruController extends Controller
         ], 201);
     }
 
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $penugasan = PenugasanGuru::findOrFail($id);
+        $penugasan = PenugasanGuru::with('rombel')->findOrFail($id);
+
+        // Validasi jenjang: admin hanya boleh hapus penugasan di jenjangnya
+        if ($penugasan->rombel && !$request->user()->bolehJenjang($penugasan->rombel->jenjang_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Penugasan ini berada di luar jenjang sekolah Anda.'
+            ], 403);
+        }
+
         $penugasan->delete();
 
         return response()->json([

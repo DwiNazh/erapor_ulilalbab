@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import SidebarAdminTu from "../../components/SidebarAdminTu";
 import * as XLSX from "xlsx";
@@ -17,8 +17,13 @@ import {
 } from "react-icons/fa";
 import toast from "react-hot-toast";
 import api from "../../api";
+import { useAuth } from "../../context/AuthContext";
+import { daftarKelas, kelasAwal } from "../../utils/rombel";
 
 export default function JadwalSekolahTerintegrasi() {
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
+
   const [rombels, setRombels] = useState([]);
   const [selectedRombelId, setSelectedRombelId] = useState(null);
   const [selectedRombelName, setSelectedRombelName] = useState("");
@@ -45,7 +50,32 @@ export default function JadwalSekolahTerintegrasi() {
   });
 
   const hariList = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const kelasOptions = [1, 2, 3, 4, 5, 6];
+
+  // Opsi kelas dinamis mengikuti jenjang admin login (SD: 1-6, SMP: 7-9, SMA: 10-12)
+  const kelasOptions = useMemo(() => {
+    if (jenjang) {
+      return daftarKelas(jenjang);
+    }
+    // Jika superadmin / jenjang tidak terikat, ambil kelas unik dari rombel aktif jika ada
+    if (rombels.length > 0) {
+      const uniqueKelas = Array.from(
+        new Set(rombels.map((r) => Number(r.tingkat_kelas || r.kelas)).filter(Boolean))
+      ).sort((a, b) => a - b);
+      if (uniqueKelas.length > 0) {
+        return uniqueKelas;
+      }
+    }
+    return daftarKelas(jenjang);
+  }, [jenjang, rombels]);
+
+  // Reset kelas terpilih jika di luar opsi jenjang aktif
+  useEffect(() => {
+    if (selectedKelas && !kelasOptions.includes(selectedKelas)) {
+      setSelectedKelas(null);
+      setSelectedRombelId(null);
+      setJadwalList([]);
+    }
+  }, [kelasOptions, selectedKelas]);
 
   const API = "/api/tu";
 
@@ -123,12 +153,13 @@ export default function JadwalSekolahTerintegrasi() {
   // DOWNLOAD TEMPLATE JADWAL EXCEL
   // ================================
   const handleDownloadTemplateJadwal = () => {
+    const contohKelas = kelasAwal(jenjang) || 1;
     const templateData = [
       {
         nipy: "4012",
         nama_guru: "Putri Maharani, S.Pd.",
         nama_mapel: "IPAS",
-        kelas: 1,
+        kelas: contohKelas,
         rombel: "B",
         hari: "selasa",
         jam_mulai: "08:00",
@@ -138,7 +169,7 @@ export default function JadwalSekolahTerintegrasi() {
         nipy: "4012",
         nama_guru: "Putri Maharani, S.Pd.",
         nama_mapel: "PKn",
-        kelas: 1,
+        kelas: contohKelas,
         rombel: "B",
         hari: "selasa",
         jam_mulai: "09:00",
@@ -437,11 +468,16 @@ export default function JadwalSekolahTerintegrasi() {
                 <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
                   Jadwal Pelajaran
                 </h1>
-                <p className="text-slate-400 text-sm mt-0.5 flex items-center gap-1.5">
+                <p className="text-slate-400 text-sm mt-0.5 flex items-center gap-1.5 flex-wrap">
                   Tahun Ajaran Aktif:{" "}
                   <span className="px-2 py-0.5 rounded-md bg-indigo-50 font-bold text-indigo-600 text-xs">
                     {tahunAktif?.nama || "---"}
                   </span>
+                  {jenjang && (
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 font-bold text-emerald-600 text-xs uppercase tracking-wider">
+                      Unit {jenjang}
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
@@ -460,11 +496,11 @@ export default function JadwalSekolahTerintegrasi() {
             <div className="flex items-center gap-2 mb-4">
               <span className="w-1 h-4 bg-indigo-600 rounded-full"></span>
               <h2 className="text-xs font-black text-slate-400 uppercase tracking-wider">
-                Pilih Tingkat Kelas
+                Pilih Tingkat Kelas {jenjang ? `(${jenjang})` : ""}
               </h2>
             </div>
 
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+            <div className="flex flex-wrap gap-3">
               {kelasOptions.map((k) => (
                 <button
                   key={k}
@@ -473,7 +509,7 @@ export default function JadwalSekolahTerintegrasi() {
                     setSelectedRombelId(null);
                     setJadwalList([]);
                   }}
-                  className={`py-3.5 rounded-xl font-bold transition-all border ${
+                  className={`min-w-[100px] flex-1 py-3.5 px-4 rounded-xl font-bold transition-all border text-center ${
                     selectedKelas === k
                       ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100 scale-[1.02]"
                       : "bg-slate-50 text-slate-600 border-slate-100 hover:bg-slate-100/70 hover:border-slate-200"

@@ -201,7 +201,7 @@ export default function RombelDanWaliKelasKelas1() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="animate-pulse flex flex-col items-center">
-          <div className="h-12 w-12 bg-indigo-200 rounded-full mb-4"></div>
+          <FaSyncAlt className="animate-spin text-indigo-600 text-3xl" />
           <p className="text-slate-500 font-medium">Memuat Data...</p>
         </div>
       </div>

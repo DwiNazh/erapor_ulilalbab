@@ -30,6 +30,43 @@ class TahunAjaran extends Model
     ];
 
     /**
+     * Helper untuk mengambil tahun ajaran aktif dengan fallback
+     */
+    public static function getAktif(): ?self
+    {
+        return static::where('aktif', 1)->first()
+            ?? static::where('status', 'aktif')->first()
+            ?? static::orderByDesc('id')->first();
+    }
+
+    /**
+     * Helper untuk mengambil tahun ajaran berikutnya yang valid (tidak boleh sama dengan tahun aktif)
+     */
+    public function getNextTahunAjaran(): ?self
+    {
+        $targetNama = null;
+        if (preg_match('/^(\d{4})\/(\d{4})$/', $this->nama, $matches)) {
+            $targetNama = ((int)$matches[1] + 1) . '/' . ((int)$matches[2] + 1);
+        }
+
+        $tahunTarget = $targetNama
+            ? static::where('nama', $targetNama)->first()
+            : null;
+
+        if (!$tahunTarget) {
+            $tahunTarget = static::where('id', '>', $this->id)
+                ->orderBy('id', 'asc')
+                ->first();
+        }
+
+        if ($tahunTarget && (int) $tahunTarget->id !== (int) $this->id) {
+            return $tahunTarget;
+        }
+
+        return null;
+    }
+
+    /**
      * Scope untuk query tahun aktif
      */
     public function scopeAktif($query)
@@ -88,5 +125,19 @@ class TahunAjaran extends Model
         return $this->finalisasiJenjang()
             ->where('jenjang_id', $jenjangId)
             ->value('finalized_at');
+    }
+
+    public static function aktifUntuk($user = null) {
+        $user = $user ?? request()->user();
+        if (!$user) return null;
+        $ids = $user->jenjangIds();
+        if ($ids === null) return static::where('aktif', 1)->first();
+        if (count($ids) !== 1) return null;
+        $row = \Illuminate\Support\Facades\DB::table('tahun_ajaran_jenjang')->where('jenjang_id', $ids[0])->where('aktif', 1)->first();
+        return $row ? static::find($row->tahun_ajaran_id) : null;
+    }
+
+    public function barisJenjang($jenjangId) {
+        return \Illuminate\Support\Facades\DB::table('tahun_ajaran_jenjang')->where('tahun_ajaran_id', $this->id)->where('jenjang_id', $jenjangId)->first();
     }
 }

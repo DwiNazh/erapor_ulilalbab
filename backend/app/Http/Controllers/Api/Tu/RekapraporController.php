@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\tu;
+namespace App\Http\Controllers\Api\Tu;
 
 use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
@@ -176,7 +176,8 @@ class RekapRaporController extends Controller
     // ================================================================
     private function getKokurikuler($siswaId, $rombelId, $semester, $tahunAjaran)
     {
-        $guruId = Auth::id();
+        $rombel = DB::table('rombel')->where('id', $rombelId)->first();
+        $guruId = $rombel?->guru_id;
 
         $row = DB::table('nilai_kokurikuler')
             ->where('siswa_id', $siswaId)
@@ -191,11 +192,14 @@ class RekapRaporController extends Controller
             return ['aspek' => []];
         }
 
-        $templates = DB::table('template_deskripsi')
-            ->where('guru_id', $guruId)
-            ->where('jenis', 'kokurikuler')
-            ->get()
-            ->groupBy(fn($t) => $t->aspek . '_' . $t->grade);
+        $templateQuery = DB::table('template_deskripsi')->where('jenis', 'kokurikuler');
+        if ($guruId) {
+            $templateQuery->where('guru_id', $guruId);
+        }
+        $templates = $templateQuery->get()->groupBy(fn($t) => $t->aspek . '_' . $t->grade);
+        if ($templates->isEmpty()) {
+            $templates = DB::table('template_deskripsi')->where('jenis', 'kokurikuler')->get()->groupBy(fn($t) => $t->aspek . '_' . $t->grade);
+        }
 
         $getDesc = function ($aspek, $grade) use ($templates) {
             $key = $aspek . '_' . $grade;

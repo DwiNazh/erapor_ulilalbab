@@ -166,7 +166,7 @@ export default function PromosiSiswa() {
         <div className="flex flex-col items-center gap-2">
           <FaSyncAlt className="animate-spin text-indigo-600 text-3xl" />
           <p className="text-slate-500 font-medium">
-            Menganalisis data promosi...
+            Menganalisis data kenaikan kelas...
           </p>
         </div>
       </div>

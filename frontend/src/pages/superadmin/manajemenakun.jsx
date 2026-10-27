@@ -286,7 +286,7 @@ export default function ManajemenAkun() {
                   <option value="admintu">Admin / TU</option>
                   <option value="guru">Guru</option>
                   <option value="kepala_sekolah">Kepala Sekolah</option>
-                  <option value="siswa">Siswa</option>
+                  {/* <option value="siswa">Siswa</option> */}
                 </select>
                 <select
                   className={`w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition bg-white ${

@@ -13,6 +13,17 @@ use Illuminate\Validation\ValidationException;
 class WaliKelasController extends Controller
 {
     /**
+     * Cek apakah guru valid: role guru dan bolehJenjang user.
+     * null/falsy $guruId = mengosongkan wali kelas, dianggap valid.
+     */
+    private function guruValid($guruId): bool
+    {
+        if (!$guruId) return true; // null = mengosongkan wali kelas
+        $guru = User::where('id', $guruId)->where('role', 'guru')->first();
+        return $guru && request()->user()->bolehJenjang($guru->jenjang_id);
+    }
+
+    /**
      * Mengambil data wali kelas berdasarkan kelas tertentu
      * GET /api/tu/wali-kelas?kelas=1
      */
@@ -45,9 +56,10 @@ public function index(Request $request)
         ]);
 
     } catch (\Throwable $e) {
+        Log::error('Error index wali kelas: ' . $e->getMessage());
         return response()->json([
             'success' => false,
-            'message' => $e->getMessage()
+            'message' => 'Terjadi kesalahan.'
         ], 500);
     }
 }
@@ -69,14 +81,22 @@ public function store(Request $request)
         DB::beginTransaction();
         
         foreach ($waliKelas as $rombelId => $guruId) {
-            $rombel = Rombel::find($rombelId);
-            if ($rombel && $request->user()->bolehJenjang($rombel->jenjang_id)) {
-                // 🔥 Update guru_id di tabel rombel
-                $rombel->guru_id = $guruId ?: null;
-                $rombel->save();
+            $rombel = Rombel::untukUser($request->user())
+                ->where('tahun_ajaran_id', $validated['tahun_ajaran_id'])
+                ->find($rombelId);
+            if (!$rombel) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Rombel tidak ditemukan.'], 404);
             }
+            if (!$this->guruValid($guruId)) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Guru yang dipilih tidak valid atau di luar jenjang Anda.'], 422);
+            }
+            // 🔥 Update guru_id di tabel rombel
+            $rombel->guru_id = $guruId ?: null;
+            $rombel->save();
         }
-        
+
         DB::commit();
 
         return response()->json([
@@ -87,10 +107,10 @@ public function store(Request $request)
     } catch (\Exception $e) {
         DB::rollBack();
         Log::error('Error simpan wali kelas: ' . $e->getMessage());
-        
+
         return response()->json([
             'success' => false,
-            'message' => $e->getMessage()
+            'message' => 'Terjadi kesalahan.'
         ], 500);
     }
 }
@@ -110,12 +130,20 @@ public function storeSiswaBaru(Request $request)
 
             DB::beginTransaction();
             foreach ($waliKelas as $rombelId => $guruId) {
-                $rombel = Rombel::find($rombelId);
-                if ($rombel && $request->user()->bolehJenjang($rombel->jenjang_id)) {
-                    // 🔥 Pastikan kolomnya 'guru_id' sesuai isi database Anda
-                    $rombel->guru_id = $guruId ?: null; 
-                    $rombel->save();
+                $rombel = Rombel::untukUser($request->user())
+                    ->where('tahun_ajaran_id', $validated['tahun_ajaran_id'])
+                    ->find($rombelId);
+                if (!$rombel) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Rombel tidak ditemukan.'], 404);
                 }
+                if (!$this->guruValid($guruId)) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Guru yang dipilih tidak valid atau di luar jenjang Anda.'], 422);
+                }
+                // 🔥 Pastikan kolomnya 'guru_id' sesuai isi database Anda
+                $rombel->guru_id = $guruId ?: null;
+                $rombel->save();
             }
             DB::commit();
 
@@ -126,7 +154,8 @@ public function storeSiswaBaru(Request $request)
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            Log::error('Error simpan siswa baru wali kelas: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan.'], 500);
         }
     }
 
@@ -141,30 +170,18 @@ public function storeSiswaBaru(Request $request)
                 'guru_id' => 'nullable|exists:users,id',
             ]);
 
-            $rombel = Rombel::findOrFail($rombelId);
+            $guruId = $validated['guru_id'] ?? null;
 
-            if (!$request->user()->bolehJenjang($rombel->jenjang_id)) {
+            $rombel = Rombel::untukUser($request->user())->findOrFail($rombelId);
+
+            if (!$this->guruValid($guruId)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Anda tidak memiliki hak akses ke rombel ini.'
-                ], 403);
+                    'message' => 'Guru tidak valid atau di luar jenjang Anda.'
+                ], 422);
             }
 
-            // Validasi bahwa guru adalah benar-benar guru
-            if ($validated['guru_id']) {
-                $guru = User::where('id', $validated['guru_id'])
-                    ->where('role', 'guru')
-                    ->first();
-
-                if (!$guru) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'User yang dipilih bukan guru'
-                    ], 422);
-                }
-            }
-
-            $rombel->guru_id = $validated['guru_id'] ?: null;
+            $rombel->guru_id = $guruId ?: null;
             $rombel->save();
 
             Log::info("Wali kelas rombel {$rombelId} diupdate menjadi: " . ($validated['guru_id'] ?: 'tidak ada'));
@@ -203,14 +220,7 @@ public function storeSiswaBaru(Request $request)
     public function destroy(Request $request, $rombelId)
     {
         try {
-            $rombel = Rombel::findOrFail($rombelId);
-            
-            if (!$request->user()->bolehJenjang($rombel->jenjang_id)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Anda tidak memiliki hak akses ke rombel ini.'
-                ], 403);
-            }
+            $rombel = Rombel::untukUser($request->user())->findOrFail($rombelId);
 
             $rombel->guru_id = null;
             $rombel->save();
@@ -242,16 +252,16 @@ public function storeSiswaBaru(Request $request)
             $tahunAjaranId = $request->query('tahun_ajaran_id');
             $user = $request->user();
 
-            // Ambil guru sesuai jenjang
+            // Ambil guru sesuai jenjang (guru tanpa jenjang juga tampil — bisa mengajar lintas jenjang)
             $query = User::where('role', 'guru');
             if ($user && $user->jenjangIds() !== null) {
-                $query->where(function($q) use ($user) {
+                $query->where(function ($q) use ($user) {
                     $q->whereIn('jenjang_id', $user->jenjangIds())
                       ->orWhereNull('jenjang_id');
                 });
             }
 
-            $allGurus = $query->select('id', 'name', 'nipy', 'email')
+            $allGurus = $query->select('id', 'name', 'nipy')
                 ->orderBy('name')
                 ->get();
 
@@ -271,7 +281,6 @@ public function storeSiswaBaru(Request $request)
                     'id' => $guru->id,
                     'nama' => $guru->name,
                     'nipy' => $guru->nipy,
-                    'email' => $guru->email,
                     'sudah_ditugaskan' => in_array($guru->id, $assignedGuruIds),
                 ];
             });

@@ -18,7 +18,7 @@ class PjblJudulController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $tahunAjaran = TahunAjaran::where('aktif', 1)->first();
+        $tahunAjaran = TahunAjaran::getAktif();
 
         if (!$tahunAjaran) {
             return response()->json(['message' => 'Tidak ada tahun ajaran aktif'], 404);
@@ -61,7 +61,7 @@ class PjblJudulController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $tahunAjaran = TahunAjaran::where('aktif', 1)->first();
+        $tahunAjaran = TahunAjaran::getAktif();
 
         if (!$tahunAjaran) {
             return response()->json(['message' => 'Tidak ada tahun ajaran aktif'], 404);
@@ -102,7 +102,7 @@ class PjblJudulController extends Controller
      */
     public function bulkStore(Request $request): JsonResponse
     {
-        $tahunAjaran = TahunAjaran::where('aktif', 1)->first();
+        $tahunAjaran = TahunAjaran::getAktif();
 
         if (!$tahunAjaran) {
             return response()->json(['message' => 'Tidak ada tahun ajaran aktif'], 404);

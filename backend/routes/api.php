@@ -117,12 +117,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::prefix('penempatan-siswa')->group(function () {
             Route::get('/siswa-belum-terdaftar', [PenempatanSiswaController::class, 'siswaBelumTerdaftar']);
-            Route::post('/tempatkan', [PenempatanSiswaController::class, 'tempatkanSiswa']);
+            Route::post('/tempatkan', [PenempatanSiswaController::class, 'tempatkanSiswa'])->middleware('check.finalisasi');
         });
 
         Route::prefix('kenaikan-kelas')->group(function () {
             Route::get('/siswa-per-kelas', [KenaikanKelasController::class, 'siswaPerKelas']);
-            Route::post('/promosi', [KenaikanKelasController::class, 'promosi']);
+            Route::post('/promosi', [KenaikanKelasController::class, 'promosi'])->middleware('check.finalisasi');
             Route::post('/finalisasi', [KenaikanKelasController::class, 'finalisasi']);
             Route::get('/status-keseluruhan', [KenaikanKelasController::class, 'statusKeseluruhan']);
             Route::post('/finalisasi-total', [KenaikanKelasController::class, 'finalisasiTotal']);
@@ -130,11 +130,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::prefix('wali-kelas')->group(function () {
             Route::get('/', [WaliKelasController::class, 'index']);
-            Route::post('/', [WaliKelasController::class, 'store']);
+            Route::post('/', [WaliKelasController::class, 'store'])->middleware('check.finalisasi');
             Route::get('/guru-tersedia', [WaliKelasController::class, 'guruTersedia']);
-            Route::post('/siswa-baru', [WaliKelasController::class, 'storeSiswaBaru']);
-            Route::put('/{rombelId}', [WaliKelasController::class, 'update']);
-            Route::delete('/{rombelId}', [WaliKelasController::class, 'destroy']);
+            Route::post('/siswa-baru', [WaliKelasController::class, 'storeSiswaBaru'])->middleware('check.finalisasi');
+            Route::put('/{rombelId}', [WaliKelasController::class, 'update'])->middleware('check.finalisasi');
+            Route::delete('/{rombelId}', [WaliKelasController::class, 'destroy'])->middleware('check.finalisasi');
         });
 
         Route::get('/guru', [KenaikanKelasController::class, 'daftarGuru']);
@@ -143,9 +143,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::prefix('siswa-baru')->group(function () {
             Route::get('/', [SiswaBaruController::class, 'index']);
-            Route::post('/bagikan-sub-kelas', [SiswaBaruController::class, 'bagikanSubKelasMassal']);
-            Route::post('/bagikan-sub-kelas-batch', [SiswaBaruController::class, 'bagikanSubKelasBatch']);
-            Route::post('/simpan-nis', [SiswaBaruController::class, 'simpanNis']);
+            Route::post('/bagikan-sub-kelas', [SiswaBaruController::class, 'bagikanSubKelasMassal'])->middleware('check.finalisasi');
+            Route::post('/bagikan-sub-kelas-batch', [SiswaBaruController::class, 'bagikanSubKelasBatch'])->middleware('check.finalisasi');
+            Route::post('/simpan-nis', [SiswaBaruController::class, 'simpanNis'])->middleware('check.finalisasi');
+            Route::post('/import-sementara', [SiswaBaruController::class, 'importSementara'])->middleware('check.finalisasi');
+            Route::delete('/{id}', [SiswaBaruController::class, 'hapusSementara'])->middleware('check.finalisasi');
         });
 
         Route::prefix('data-siswa')->group(function () {

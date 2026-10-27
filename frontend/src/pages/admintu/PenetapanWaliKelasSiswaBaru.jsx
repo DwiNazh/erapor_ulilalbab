@@ -1,12 +1,16 @@
-// src/Dashboard/TuSD/PenetapanWaliKelasSiswaBaru.jsx
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import SidebarAdminTu from "../../components/SidebarAdminTu";
 import toast from "react-hot-toast";
 import api from "../../api";
+import { useAuth } from "../../context/AuthContext";
+import { kelasAwal } from "../../utils/rombel";
 
 export default function PenetapanWaliKelasSiswaBaru() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const jenjang = user?.jenjang;
+  const targetKelas = kelasAwal(jenjang) || 1;
 
   const [tahunTujuan, setTahunTujuan] = useState(null);
   const [rombels, setRombels] = useState([]);
@@ -52,11 +56,11 @@ export default function PenetapanWaliKelasSiswaBaru() {
 
         setTahunTujuan(target);
 
-        // 🔥 Ambil rombel kelas 1
+        // 🔥 Ambil rombel kelas awal jenjang
         const resRombel = await api.get(`${API}/rombel`, {
           params: {
             tahun_ajaran_id: target.id,
-            kelas: 1,
+            kelas: targetKelas,
           },
         });
 
@@ -70,7 +74,7 @@ export default function PenetapanWaliKelasSiswaBaru() {
         const resWali = await api.get(`${API}/wali-kelas`, {
           params: {
             tahun_ajaran_id: target.id,
-            kelas: 1,
+            kelas: targetKelas,
           },
         });
 
@@ -89,7 +93,7 @@ export default function PenetapanWaliKelasSiswaBaru() {
     };
 
     fetchData();
-  }, []);
+  }, [targetKelas]);
 
   const handleAssignmentChange = (rombelId, guruId) => {
     setWaliAssignments((prev) => ({
@@ -105,12 +109,12 @@ export default function PenetapanWaliKelasSiswaBaru() {
     try {
       await api.post(`${API}/wali-kelas/siswa-baru`, {
         tahun_ajaran_id: tahunTujuan.id,
-        kelas: 1,
+        kelas: targetKelas,
         wali_kelas: waliAssignments,
       });
 
       toast.success("Penetapan wali kelas berhasil disimpan");
-      navigate("/dashboardtusd/siswa-baru");
+      navigate("/dashboardtusd/siswabaru");
     } catch (err) {
       toast.error(err.response?.data?.message || "Gagal menyimpan");
     } finally {
@@ -134,7 +138,7 @@ export default function PenetapanWaliKelasSiswaBaru() {
         <div className="max-w-5xl mx-auto">
           <div className="mb-6">
             <h1 className="text-2xl font-medium text-gray-900">
-              Penetapan Wali Kelas (Kelas 1)
+              Penetapan Wali Kelas (Kelas {targetKelas})
             </h1>
             <p className="mt-1 text-sm text-gray-600">
               Tahun ajaran target:{" "}
@@ -146,7 +150,7 @@ export default function PenetapanWaliKelasSiswaBaru() {
 
           {rombels.length === 0 ? (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 text-center text-amber-700">
-              Belum ada rombel kelas 1.<br />
+              Belum ada rombel kelas {targetKelas}.<br />
               Silakan buat rombel terlebih dahulu.
             </div>
           ) : (

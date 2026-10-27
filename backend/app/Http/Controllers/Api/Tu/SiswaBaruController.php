@@ -10,6 +10,7 @@ use App\Models\TahunAjaran;
 use App\Models\Rombel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 
 class SiswaBaruController extends Controller
 {
@@ -71,6 +72,23 @@ class SiswaBaruController extends Controller
                 }
             }
 
+            // Validasi jenjang siswa vs jenjang rombel
+            $adaBedaJenjangRombel = DB::table('siswas')
+                ->whereIn('id', $request->siswa_ids)
+                ->where('is_processed', 0)
+                ->whereNotNull('jenjang_id')
+                ->where('jenjang_id', '!=', $rombel->jenjang_id)
+                ->exists();
+            if ($adaBedaJenjangRombel) {
+                return response()->json(['message' => 'Jenjang siswa tidak sesuai dengan jenjang rombel tujuan.'], 422);
+            }
+
+            // Validasi siswa baru hanya boleh masuk ke kelas awal jenjang
+            $kelasAwal = DB::table('jenjang')->where('id', $rombel->jenjang_id)->value('kelas_min') ?? 1;
+            if ((int) $rombel->tingkat_kelas !== (int) $kelasAwal) {
+                return response()->json(['message' => "Siswa baru hanya dapat dibagikan ke kelas awal ({$kelasAwal}), bukan kelas {$rombel->tingkat_kelas}."], 422);
+            }
+
             if (in_array($rombel->kelompok_gender ?? 'campuran', ['ikhwan', 'akhwat'], true)) {
                 $salah = DB::table('siswas')
                     ->whereIn('id', $request->siswa_ids)
@@ -111,17 +129,130 @@ class SiswaBaruController extends Controller
     }
 
     /**
-     * POST /api/tu/siswa-baru/simpan-nis
-     * Migrasi siswa dari tabel staging (siswas) ke master (siswa) + siswa_tahun
+     * POST /api/tu/siswa-baru/bagikan-sub-kelas-batch
+     * Bagikan banyak siswa ke banyak rombel sekaligus dalam satu request.
+     * Body: { assignments: [{ rombel_id: X, siswa_ids: [1, 2, 3] }, ...] }
      */
+    public function bagikanSubKelasBatch(Request $request)
+    {
+        $request->validate([
+            'assignments'              => 'required|array|min:1',
+            'assignments.*.rombel_id'  => 'required|exists:rombel,id',
+            'assignments.*.siswa_ids'  => 'required|array|min:1',
+            'assignments.*.siswa_ids.*' => 'integer|exists:siswas,id',
+        ]);
+
+        $totalAffected = 0;
+        $errors = [];
+
+        DB::beginTransaction();
+        try {
+            foreach ($request->assignments as $idx => $assignment) {
+                $rombel = DB::table('rombel')->where('id', $assignment['rombel_id'])->first();
+
+                if (!$rombel || !$request->user()->bolehJenjang($rombel->jenjang_id)) {
+                    $errors[] = "Assignment #{$idx}: Rombel tidak ditemukan atau di luar jenjang Anda.";
+                    continue;
+                }
+
+                $siswaIds = $assignment['siswa_ids'];
+
+                // Validasi jenjang siswa
+                $userJenjang = $request->user()->jenjangIds();
+                if ($userJenjang !== null) {
+                    $adaBedaJenjang = DB::table('siswas')
+                        ->whereIn('id', $siswaIds)
+                        ->whereNotIn('jenjang_id', $userJenjang)
+                        ->exists();
+                    if ($adaBedaJenjang) {
+                        $errors[] = "Assignment #{$idx}: Ada siswa di luar jenjang yang Anda kelola.";
+                        continue;
+                    }
+                }
+
+                // Validasi jenjang siswa vs jenjang rombel
+                $adaBedaJenjangRombel = DB::table('siswas')
+                    ->whereIn('id', $siswaIds)
+                    ->where('is_processed', 0)
+                    ->whereNotNull('jenjang_id')
+                    ->where('jenjang_id', '!=', $rombel->jenjang_id)
+                    ->exists();
+                if ($adaBedaJenjangRombel) {
+                    $errors[] = "Assignment #{$idx}: Ada siswa yang jenjangnya tidak sesuai dengan rombel.";
+                    continue;
+                }
+
+                // Validasi rombel harus kelas awal jenjang
+                $kelasAwal = DB::table('jenjang')->where('id', $rombel->jenjang_id)->value('kelas_min') ?? 1;
+                if ((int) $rombel->tingkat_kelas !== (int) $kelasAwal) {
+                    $errors[] = "Assignment #{$idx}: Siswa baru hanya dapat dibagikan ke kelas awal ({$kelasAwal}).";
+                    continue;
+                }
+
+                // Validasi kategori gender
+                if (in_array($rombel->kelompok_gender ?? 'campuran', ['ikhwan', 'akhwat'], true)) {
+                    $salah = DB::table('siswas')
+                        ->whereIn('id', $siswaIds)
+                        ->where('is_processed', 0)
+                        ->where(function ($q) use ($rombel) {
+                            $q->whereNull('kategori')->orWhere('kategori', '!=', $rombel->kelompok_gender);
+                        })
+                        ->pluck('nama_user');
+
+                    if ($salah->isNotEmpty()) {
+                        $errors[] = "Assignment #{$idx}: Kategori tidak sesuai untuk: " . $salah->implode(', ');
+                        continue;
+                    }
+                }
+
+                $affected = DB::table('siswas')
+                    ->whereIn('id', $siswaIds)
+                    ->where('is_processed', 0)
+                    ->update([
+                        'kelas'      => $rombel->tingkat_kelas,
+                        'sub_kelas'  => $rombel->sub_nama,
+                        'updated_at' => now(),
+                    ]);
+
+                $totalAffected += $affected;
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'message'        => "Berhasil membagikan {$totalAffected} siswa secara batch.",
+                'total_affected' => $totalAffected,
+                'errors'         => $errors,
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Gagal bagikan sub kelas batch: ' . $e->getMessage());
+            return response()->json(['message' => 'Gagal memproses pembagian kelas batch.'], 500);
+        }
+    }
+
+
+    //  Migrasi siswa dari tabel staging (siswas) ke master (siswa) + siswa_tahun
+
     public function simpanNis(Request $request)
     {
         $request->validate([
             'id' => 'required|integer|exists:siswas,id',
-            // PERBAIKAN: NIS & NISN dicek unik di KEDUA tabel (siswas & siswa),
-            // supaya tidak ada siswa lama & siswa baru bentrok NIS/NISN.
-            'nis' => 'required|string|max:20|unique:siswas,nis|unique:siswa,nis',
-            'nisn' => 'nullable|string|max:20|unique:siswas,nisn|unique:siswa,nisn',
+            'nis' => [
+                'required',
+                'string',
+                'max:20',
+                Rule::unique('siswas', 'nis')->ignore($request->id),
+                'unique:siswa,nis',
+            ],
+            'nisn' => [
+                'nullable',
+                'string',
+                'max:20',
+                Rule::unique('siswas', 'nisn')->ignore($request->id),
+                'unique:siswa,nisn',
+            ],
         ], [
             'nis.unique' => 'NIS sudah terdaftar (baik di data pendaftar maupun siswa master), silakan gunakan NIS lain.',
             'nisn.unique' => 'NISN sudah terdaftar, silakan gunakan NISN lain.',
@@ -158,19 +289,16 @@ class SiswaBaruController extends Controller
             }
 
             // 1. Cari Tahun Ajaran Aktif saat ini
-            $tahunSekarang = TahunAjaran::where('aktif', 1)->firstOrFail();
+            $tahunSekarang = TahunAjaran::getAktif();
+            if (!$tahunSekarang) {
+                throw new \Exception('Tahun ajaran aktif belum ditentukan. Silakan aktifkan tahun ajaran terlebih dahulu.');
+            }
 
-            // 2. Cari Tahun Ajaran Berikutnya (Target)
-            //    CATATAN: masih mengandalkan urutan id. Kalau tabel tahun_ajaran
-            //    punya kolom eksplisit untuk urutan/tanggal_mulai, sebaiknya
-            //    ->orderBy('tanggal_mulai') dipakai supaya tidak salah kalau
-            //    ada tahun ajaran yang dibuat belakangan tapi urutannya di masa lalu.
-            $tahunTarget = TahunAjaran::where('id', '>', $tahunSekarang->id)
-                ->orderBy('id', 'asc')
-                ->first();
+            // 2. Cari Tahun Ajaran Berikutnya (Target) - WAJIB tahun berikutnya, JANGAN fallback ke tahun aktif
+            $tahunTarget = $tahunSekarang->getNextTahunAjaran();
 
-            if (!$tahunTarget) {
-                throw new \Exception('Tahun ajaran berikutnya belum dibuat/tidak ditemukan. Silakan buat tahun ajaran baru terlebih dahulu.');
+            if (!$tahunTarget || (int) $tahunTarget->id === (int) $tahunSekarang->id) {
+                throw new \Exception('Tahun ajaran berikutnya belum dibuat atau tidak ditemukan. Siswa baru hanya dapat didaftarkan ke tahun ajaran berikutnya, bukan tahun ajaran aktif.');
             }
 
             // 3. Tentukan kategori rombel (kelas 4 ke atas wajib ikhwan/akhwat)
@@ -220,6 +348,7 @@ class SiswaBaruController extends Controller
                 'siswa_id' => $siswaMaster->id,
                 'tahun_ajaran_id' => $tahunTarget->id,
                 'rombel_id' => $rombel->id,
+                'jenjang_id' => $jenjangId,
                 'status' => 'AKTIF',
                 'is_processed' => 0, // belum diproses karena baru akan mulai sekolah
             ]);
@@ -243,6 +372,155 @@ class SiswaBaruController extends Controller
                 'siswa_id' => $request->id,
             ]);
             return response()->json(['message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * POST /api/tu/siswa-baru/import-sementara
+     * Import data siswa baru sementara untuk keperluan pengujian awal
+     */
+    public function importSementara(Request $request)
+    {
+        $request->validate([
+            'siswa'             => 'required|array|min:1',
+            'siswa.*.nama_user' => 'required|string|max:150',
+            'siswa.*.nisn'      => 'nullable|string|max:30',
+            'siswa.*.kategori'  => 'nullable|string|max:20',
+            'siswa.*.ppdb_id'   => 'nullable|string|max:50',
+            'jenjang_id'        => 'nullable|integer|exists:jenjang,id',
+            'kelas'             => 'nullable',
+        ], [
+            'siswa.required'             => 'Data siswa tidak boleh kosong.',
+            'siswa.*.nama_user.required' => 'Nama siswa wajib diisi.',
+        ]);
+
+        $user = $request->user();
+        $userJenjang = $user ? $user->jenjangIds() : null;
+
+        // Tentukan jenjang_id
+        $targetJenjangId = null;
+        if ($request->filled('jenjang_id')) {
+            $targetJenjangId = (int) $request->jenjang_id;
+        } elseif ($userJenjang && count($userJenjang) > 0) {
+            $targetJenjangId = $userJenjang[0];
+        } else {
+            $targetJenjangId = DB::table('jenjang')->where('kode', 'SD')->value('id') ?? 1;
+        }
+
+        if ($user && !$user->bolehJenjang($targetJenjangId)) {
+            return response()->json(['message' => 'Anda tidak memiliki hak akses untuk jenjang ini.'], 403);
+        }
+
+        // Tentukan kelas target (kolom 'kelas' di tabel siswas NOT NULL)
+        $targetKelas = null;
+        if ($request->filled('kelas') && !empty($request->kelas)) {
+            $targetKelas = (string) $request->kelas;
+        } else {
+            $targetKelas = (string) (DB::table('jenjang')->where('id', $targetJenjangId)->value('kelas_min') ?? '1');
+        }
+
+        DB::beginTransaction();
+        try {
+            $importedCount = 0;
+            $skippedCount = 0;
+
+            foreach ($request->siswa as $item) {
+                $nama = trim($item['nama_user'] ?? '');
+                if (!$nama) {
+                    $skippedCount++;
+                    continue;
+                }
+
+                $nisn = !empty($item['nisn']) ? trim((string) $item['nisn']) : null;
+                $kategori = !empty($item['kategori']) ? strtolower(trim($item['kategori'])) : null;
+                if (!in_array($kategori, ['ikhwan', 'akhwat'], true)) {
+                    $kategori = null;
+                }
+
+                // Cek apakah NISN sudah ada di antrean siswa baru
+                if ($nisn) {
+                    $adaNisn = DB::table('siswas')
+                        ->where('nisn', $nisn)
+                        ->where('is_processed', 0)
+                        ->exists();
+                    if ($adaNisn) {
+                        $skippedCount++;
+                        continue;
+                    }
+                }
+
+                $ppdbId = !empty($item['ppdb_id'])
+                    ? trim((string) $item['ppdb_id'])
+                    : ('TEST-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(3)), 0, 6)));
+
+                while (DB::table('siswas')->where('ppdb_id', $ppdbId)->exists()) {
+                    $ppdbId = 'TEST-' . date('Ymd') . '-' . strtoupper(substr(bin2hex(random_bytes(4)), 0, 8));
+                }
+
+                DB::table('siswas')->insert([
+                    'nama_user'    => $nama,
+                    'ppdb_id'      => $ppdbId,
+                    'nisn'         => $nisn,
+                    'nis'          => null,
+                    'kelas'        => $targetKelas,
+                    'sub_kelas'    => null,
+                    'kategori'     => $kategori,
+                    'jenjang_id'   => $targetJenjangId,
+                    'is_processed' => 0,
+                    'created_at'   => now(),
+                    'updated_at'   => now(),
+                ]);
+
+                $importedCount++;
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success'        => true,
+                'message'        => "Berhasil mengimpor {$importedCount} data siswa baru sementara." . ($skippedCount > 0 ? " ({$skippedCount} duplikat dilewati)" : ""),
+                'total_imported' => $importedCount,
+                'total_skipped'  => $skippedCount,
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Gagal import sementara siswa baru: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Terjadi kesalahan saat mengimpor data: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * DELETE /api/tu/siswa-baru/{id}
+     * Hapus data siswa baru sementara yang belum diproses
+     */
+    public function hapusSementara(Request $request, $id)
+    {
+        try {
+            $siswa = DB::table('siswas')->where('id', $id)->first();
+            if (!$siswa) {
+                return response()->json(['message' => 'Data siswa tidak ditemukan.'], 404);
+            }
+
+            if ((int) $siswa->is_processed !== 0) {
+                return response()->json(['message' => 'Siswa yang sudah diproses menjadi siswa master tidak dapat dihapus di sini.'], 400);
+            }
+
+            if ($siswa->jenjang_id && !$request->user()->bolehJenjang($siswa->jenjang_id)) {
+                return response()->json(['message' => 'Anda tidak memiliki akses ke data siswa ini.'], 403);
+            }
+
+            DB::table('siswas')->where('id', $id)->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Data siswa baru sementara berhasil dihapus.',
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Gagal menghapus siswa baru sementara: ' . $e->getMessage());
+            return response()->json(['message' => 'Gagal menghapus data siswa.'], 500);
         }
     }
 }

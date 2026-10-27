@@ -34,6 +34,7 @@ export default function PenempatanSiswa() {
   const [processing, setProcessing] = useState(false);
   const [tahunAktif, setTahunAktif] = useState(null);
   const [tahunTujuan, setTahunTujuan] = useState(null);
+  const [daftarTahun, setDaftarTahun] = useState([]);
   const [showAddRombelModal, setShowAddRombelModal] = useState(false);
   const [rombelForm, setRombelForm] = useState({
     tingkat_kelas: "",
@@ -71,11 +72,12 @@ export default function PenempatanSiswa() {
 
       const resAll = await api.get(`${API}/tahunajaran`);
       const allTahun = resAll.data?.data || [];
-      const target = allTahun.find((t) => t.nama === targetNama);
+      setDaftarTahun(allTahun);
 
+      let target = allTahun.find((t) => t.nama === targetNama);
       if (!target) {
-        toast.error(`Tahun target ${targetNama} belum dibuat.`);
-        return;
+        // Fallback ke tahun ajaran aktif jika tahun depan belum dibuat
+        target = aktif;
       }
 
       setTahunTujuan(target);
@@ -286,12 +288,33 @@ export default function PenempatanSiswa() {
               <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
                 <FaUserFriends className="text-indigo-600" /> Penempatan Siswa
               </h1>
-              <p className="text-slate-500 mt-1">
-                Persiapan Tahun Ajaran:{" "}
-                <span className="font-bold text-emerald-600">
-                  {tahunTujuan?.nama}
-                </span>
-              </p>
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                <span className="text-slate-500 text-sm">Tahun Ajaran:</span>
+                {daftarTahun.length > 0 ? (
+                  <select
+                    value={tahunTujuan?.id || ""}
+                    onChange={(e) => {
+                      const selected = daftarTahun.find((t) => t.id === Number(e.target.value));
+                      if (selected) {
+                        setTahunTujuan(selected);
+                        loadRombel(selected.id);
+                        loadSiswa(selected.id);
+                      }
+                    }}
+                    className="text-xs font-bold bg-white border border-slate-200 text-emerald-700 px-2.5 py-1 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {daftarTahun.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.nama} {t.aktif ? "(Aktif)" : t.status === "dikunci" ? "(Terkunci)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-bold text-emerald-600 text-sm">
+                    {tahunTujuan?.nama}
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-3">

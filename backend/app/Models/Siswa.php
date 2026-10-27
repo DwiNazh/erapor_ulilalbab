@@ -18,7 +18,12 @@ class Siswa extends Authenticatable
         'nis',
         'nisn',
         'password',
-        'kategori', 
+        'kategori',
+        'sub',
+        'wali_id',
+        'tahun_ajaran_id',
+        'is_processed',
+        'is_graduated',
     ];
 
     protected $hidden = [
@@ -64,12 +69,12 @@ class Siswa extends Authenticatable
         );
     }
 
-    public function scopeUntukUser($query, $user)
-    {
-        if (!$user || $user->isSuperadmin()) {
-            return $query;
-        }
-        $range = $user->kelasRange();
-        return $query->whereBetween('kelas', [$range['min'], $range['max']]);
+    public function scopeUntukUser($query, $user) {
+        if (!$user) { return $query->whereRaw('1 = 0'); }
+        $ids = $user->jenjangIds();
+        if ($ids === null) { return $query; }
+        return $query->whereHas('siswaTahun', function ($q) use ($ids) {
+            $q->whereIn('jenjang_id', $ids);
+        });
     }
 }

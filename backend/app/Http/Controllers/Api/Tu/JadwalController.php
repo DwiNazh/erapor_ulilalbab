@@ -102,6 +102,21 @@ class JadwalController extends Controller
                 ], 403);
             }
 
+            if ($rombel->tahun_ajaran_id != $validated['tahun_ajaran_id']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tahun ajaran tidak sesuai dengan rombel.'
+                ], 422);
+            }
+
+            $guru = User::where('id', $validated['guru_id'])->where('role', 'guru')->first();
+            if (!$guru || !$request->user()->bolehJenjang($guru->jenjang_id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Guru bukan guru atau berada di luar jenjang Anda.'
+                ], 422);
+            }
+
             \Log::info('✅ Validasi berhasil:', $validated);
 
             // ✅ STEP 1: Pastikan penugasan guru sudah ada
@@ -175,8 +190,7 @@ class JadwalController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Terjadi kesalahan server',
-                'debug' => $e->getMessage()
+                'message' => 'Terjadi kesalahan server.'
             ], 500);
         }
     }
@@ -188,13 +202,13 @@ class JadwalController extends Controller
      * - Benar-benar menghapus jadwal di database
      * - Optionally menghapus penugasan yang terkait
      */
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
         try {
             \Log::info('📌 Deleting jadwal ID:', ['id' => $id]);
 
             // Find jadwal
-            $jadwal = Jadwal::findOrFail($id);
+            $jadwal = Jadwal::untukUser($request->user())->findOrFail($id);
 
             // ✅ OPTION 1: Hapus jadwal saja (penugasan tetap ada)
             // $jadwal->delete();
@@ -247,8 +261,7 @@ class JadwalController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal menghapus jadwal',
-                'debug' => $e->getMessage()
+                'message' => 'Gagal menghapus jadwal.'
             ], 500);
         }
     }

@@ -16,7 +16,7 @@ class KenaikanKelasController extends Controller
 {
     public function tahunAjaranAktif()
     {
-        $tahun = TahunAjaran::where('aktif', 1)->first();
+        $tahun = TahunAjaran::getAktif();
 
         if (!$tahun) {
             return response()->json([
@@ -35,7 +35,7 @@ class KenaikanKelasController extends Controller
 
     public function siswaPerKelas(Request $request)
     {
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return response()->json([
@@ -81,7 +81,7 @@ class KenaikanKelasController extends Controller
     public function dataSiswa(Request $request)
     {
         try {
-            $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+            $tahunAktif = TahunAjaran::getAktif();
 
             if (!$tahunAktif) {
                 return response()->json([
@@ -185,24 +185,41 @@ class KenaikanKelasController extends Controller
             'tahun_ajaran_target_id' => 'required|integer|exists:tahun_ajaran,id',
         ]);
 
-        $tahunTargetId = $validated['tahun_ajaran_target_id'];
+        $tahunTargetId = (int) $validated['tahun_ajaran_target_id'];
         $naik = $validated['naik'] ?? [];
         $tinggal = $validated['tinggal'] ?? [];
         $lulus = $validated['lulus'] ?? [];
         $perluKategori = [];
 
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
         if (!$tahunAktif) {
             return response()->json(['success' => false, 'message' => 'Tahun ajaran aktif tidak ditemukan'], 422);
+        }
+
+        $tahunTargetExpected = $tahunAktif->getNextTahunAjaran();
+        if (!$tahunTargetExpected) {
+            return response()->json(['success' => false, 'message' => 'Tahun ajaran target berikutnya belum dibuat atau tidak ditemukan.'], 422);
+        }
+
+        if ($tahunTargetId === (int) $tahunAktif->id) {
+            return response()->json(['success' => false, 'message' => 'Tahun ajaran target tidak boleh sama dengan tahun ajaran aktif.'], 422);
+        }
+
+        if ($tahunTargetId !== (int) $tahunTargetExpected->id) {
+            return response()->json(['success' => false, 'message' => 'Tahun ajaran target harus merupakan tahun ajaran berikutnya yang valid (' . $tahunTargetExpected->nama . ').'], 422);
         }
 
         $user = $request->user();
         if ($user && !$user->isSuperadmin()) {
             $idsJenjang = $user->jenjangIds();
             $allIds = collect($naik)->pluck('id')->merge(collect($tinggal)->pluck('id'))->merge(collect($lulus)->pluck('id'))->unique();
+            // Fallback: cek jenjang_id langsung ATAU lewat rombel (jika jenjang_id di siswa_tahun masih NULL)
             $valid = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
                 ->whereIn('siswa_id', $allIds)
-                ->whereHas('rombel', fn ($q) => $q->whereIn('jenjang_id', $idsJenjang))
+                ->where(function ($q) use ($idsJenjang) {
+                    $q->whereIn('jenjang_id', $idsJenjang)
+                      ->orWhereHas('rombel', fn($r) => $r->whereIn('jenjang_id', $idsJenjang));
+                })
                 ->pluck('siswa_id')->unique();
             if ($valid->count() !== $allIds->count()) {
                 return response()->json(['success' => false, 'message' => 'Ada siswa di luar jenjang Anda atau tanpa data tahun aktif.'], 403);
@@ -211,6 +228,7 @@ class KenaikanKelasController extends Controller
 
         $ditolak = [];
         $batasKelas = fn ($k) => DB::table('jenjang')->where('kelas_min', '<=', $k)->where('kelas_max', '>=', $k)->value('kelas_max');
+        $jenjangDariKelas = fn ($k) => DB::table('jenjang')->where('kelas_min', '<=', $k)->where('kelas_max', '>=', $k)->value('id');
 
         DB::beginTransaction();
         try {
@@ -226,6 +244,10 @@ class KenaikanKelasController extends Controller
                     ->first();
 
                 $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
+                if ($kelasSekarang == 0) {
+                    $master = Siswa::find($siswaId);
+                    $kelasSekarang = $master?->kelas ?? 0;
+                }
 
                 if ($kelasSekarang == 0 || $kelasSekarang >= $batasKelas($kelasSekarang)) {
                     $ditolak[] = $siswaId;
@@ -234,35 +256,41 @@ class KenaikanKelasController extends Controller
 
                 $kelasBaru = $kelasSekarang + 1;
 
-                if (
-                    SiswaTahun::where('siswa_id', $siswaId)
-                        ->where('tahun_ajaran_id', $tahunTargetId)->exists()
-                ) {
-                    continue;
-                }
-
-                SiswaTahun::create([
-                    'siswa_id' => $siswaId,
-                    'tahun_ajaran_id' => $tahunTargetId,
-                    'rombel_id' => null,
-                    'tingkat_kelas' => $kelasBaru,           // ← Penting!
-                    'status' => 'AKTIF',
-                    'is_processed' => 1,
-                ]);
+                // Idempoten: Update atau buat di tahun target
+                SiswaTahun::updateOrCreate(
+                    [
+                        'siswa_id' => $siswaId,
+                        'tahun_ajaran_id' => $tahunTargetId,
+                    ],
+                    [
+                        'rombel_id' => null,
+                        'jenjang_id' => $jenjangDariKelas($kelasBaru),
+                        'status' => 'AKTIF',
+                        'is_processed' => 0,
+                    ]
+                );
 
                 if ($kelasBaru >= RombelController::TINGKAT_MULAI_PISAH_GENDER) {
                     $perluKategori[] = $siswaId;
                 }
 
-                // Tandai sudah diproses di tahun aktif
-                SiswaTahun::where('siswa_id', $siswaId)
-                    ->where('tahun_ajaran_id', $tahunAktif->id)
-                    ->update(['is_processed' => 1]);
+                // Tandai sudah diproses di tahun aktif (pastikan record ada)
+                SiswaTahun::updateOrCreate(
+                    [
+                        'siswa_id' => $siswaId,
+                        'tahun_ajaran_id' => $tahunAktif->id,
+                    ],
+                    [
+                        'is_processed' => 1,
+                    ]
+                );
 
                 // Sinkronkan ke master siswa
                 Siswa::where('id', $siswaId)->update([
                     'kelas' => $kelasBaru,
+                    'sub' => null,
                     'tahun_ajaran_id' => $tahunTargetId,
+                    'is_graduated' => 0,
                 ]);
 
                 $diproses++;
@@ -277,38 +305,49 @@ class KenaikanKelasController extends Controller
                     ->first();
 
                 $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
+                if ($kelasSekarang == 0) {
+                    $master = Siswa::find($siswaId);
+                    $kelasSekarang = $master?->kelas ?? 0;
+                }
 
                 if ($kelasSekarang == 0) {
                     $ditolak[] = $siswaId;
                     continue;
                 }
 
-                if (
-                    SiswaTahun::where('siswa_id', $siswaId)
-                        ->where('tahun_ajaran_id', $tahunTargetId)->exists()
-                ) {
-                    continue;
-                }
-
-                SiswaTahun::create([
-                    'siswa_id' => $siswaId,
-                    'tahun_ajaran_id' => $tahunTargetId,
-                    'rombel_id' => null,
-                    'tingkat_kelas' => $kelasSekarang,   // tetap di kelas yang sama
-                    'status' => 'AKTIF',
-                    'is_processed' => 1,
-                ]);
+                // Idempoten: Update atau buat di tahun target
+                SiswaTahun::updateOrCreate(
+                    [
+                        'siswa_id' => $siswaId,
+                        'tahun_ajaran_id' => $tahunTargetId,
+                    ],
+                    [
+                        'rombel_id' => null,
+                        'jenjang_id' => $jenjangDariKelas($kelasSekarang),
+                        'status' => 'AKTIF',
+                        'is_processed' => 0,
+                    ]
+                );
 
                 if ($kelasSekarang >= RombelController::TINGKAT_MULAI_PISAH_GENDER) {
                     $perluKategori[] = $siswaId;
                 }
 
-                SiswaTahun::where('siswa_id', $siswaId)
-                    ->where('tahun_ajaran_id', $tahunAktif->id)
-                    ->update(['is_processed' => 1]);
+                SiswaTahun::updateOrCreate(
+                    [
+                        'siswa_id' => $siswaId,
+                        'tahun_ajaran_id' => $tahunAktif->id,
+                    ],
+                    [
+                        'is_processed' => 1,
+                    ]
+                );
 
                 Siswa::where('id', $siswaId)->update([
+                    'kelas' => $kelasSekarang,
+                    'sub' => null,
                     'tahun_ajaran_id' => $tahunTargetId,
+                    'is_graduated' => 0,
                 ]);
 
                 $diproses++;
@@ -323,18 +362,31 @@ class KenaikanKelasController extends Controller
                     ->first();
 
                 $kelasSekarang = $current?->rombel?->tingkat_kelas ?? $current?->tingkat_kelas ?? 0;
+                if ($kelasSekarang == 0) {
+                    $master = Siswa::find($siswaId);
+                    $kelasSekarang = $master?->kelas ?? 0;
+                }
 
                 if ($kelasSekarang == 0 || $kelasSekarang != $batasKelas($kelasSekarang)) {
                     $ditolak[] = $siswaId;
                     continue;
                 }
 
+                // Hapus baris di tahun target jika sebelumnya sempat dibuat (idempoten)
                 SiswaTahun::where('siswa_id', $siswaId)
-                    ->where('tahun_ajaran_id', $tahunAktif->id)
-                    ->update([
+                    ->where('tahun_ajaran_id', $tahunTargetId)
+                    ->delete();
+
+                SiswaTahun::updateOrCreate(
+                    [
+                        'siswa_id' => $siswaId,
+                        'tahun_ajaran_id' => $tahunAktif->id,
+                    ],
+                    [
                         'status' => 'LULUS',
-                        'is_processed' => 1
-                    ]);
+                        'is_processed' => 1,
+                    ]
+                );
 
                 Siswa::where('id', $siswaId)->update([
                     'is_graduated' => 1,
@@ -459,7 +511,8 @@ class KenaikanKelasController extends Controller
 
     public function finalisasi(Request $request)
     {
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $user = $request->user();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return response()->json([
@@ -468,23 +521,8 @@ class KenaikanKelasController extends Controller
             ], 422);
         }
 
-        if ($tahunAktif->kenaikan_kelas_finalized_at) {  // Ubah ke nama field ini jika cocok dengan DB
-            return response()->json([
-                'success' => false,
-                'message' => 'Tahun ajaran ini sudah difinalisasi sebelumnya'
-            ], 422);
-        }
-
-
-        $tahunAktif->update(['kenaikan_kelas_finalized_at' => now()]);
-
-        Log::info('Finalisasi berhasil untuk tahun: ' . $tahunAktif->nama);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Kenaikan kelas berhasil difinalisasi pada ' . now()->format('d M Y H:i'),
-            'kenaikan_kelas_finalized_at' => $tahunAktif->fresh()->kenaikan_kelas_finalized_at
-        ]);
+        // Delegate ke finalisasiTotal agar logika per-jenjang konsisten
+        return $this->finalisasiTotal($request);
     }
 
     public function finalisasiTotal(Request $request)
@@ -493,12 +531,20 @@ class KenaikanKelasController extends Controller
         if (!$user->isSuperadmin() && !$user->jenjang_id) {
             return response()->json(['success' => false, 'message' => 'Akun Anda belum terhubung ke jenjang.'], 403);
         }
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return response()->json([
                 'success' => false,
                 'message' => 'Tidak ada tahun ajaran aktif'
+            ], 422);
+        }
+
+        $tahunTarget = $tahunAktif->getNextTahunAjaran();
+        if (!$tahunTarget) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tahun ajaran target berikutnya belum dibuat atau tidak ditemukan.'
             ], 422);
         }
 
@@ -514,7 +560,23 @@ class KenaikanKelasController extends Controller
                 ], 422);
             }
 
-            // Cek apakah ada siswa baru PPDB di jenjang ini yang belum diproses
+            // 1. Promosi selesai: Cek apakah ada siswa di jenjang ini yang belum diproses kenaikannya
+            $siswaBelumDiproses = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
+                ->where(function ($q) use ($jenjangId) {
+                    $q->where('jenjang_id', $jenjangId)
+                      ->orWhereHas('rombel', fn($r) => $r->where('jenjang_id', $jenjangId));
+                })
+                ->where('is_processed', 0)
+                ->count();
+
+            if ($siswaBelumDiproses > 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Masih ada {$siswaBelumDiproses} siswa pada jenjang ini yang belum diproses kenaikan kelasnya."
+                ], 422);
+            }
+
+            // 2. Siswa baru selesai: Cek apakah ada siswa baru PPDB di jenjang ini yang belum diproses
             $siswaBaruBelumDiproses = DB::table('siswas')
                 ->where('jenjang_id', $jenjangId)
                 ->where('is_processed', 0)
@@ -527,16 +589,33 @@ class KenaikanKelasController extends Controller
                 ], 422);
             }
 
-            // Cek apakah ada siswa di jenjang ini yang belum diproses kenaikannya
-            $siswaBelumDiproses = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
-                ->untukUser($user)
-                ->where('is_processed', 0)
+            // 3. Penempatan selesai: Semua siswa aktif di tahun target pada jenjang ini harus punya rombel
+            $siswaTanpaRombel = SiswaTahun::where('tahun_ajaran_id', $tahunTarget->id)
+                ->where(function ($q) use ($jenjangId) {
+                    $q->where('jenjang_id', $jenjangId)
+                      ->orWhereHas('rombel', fn($r) => $r->where('jenjang_id', $jenjangId));
+                })
+                ->where('status', 'AKTIF')
+                ->whereNull('rombel_id')
                 ->count();
 
-            if ($siswaBelumDiproses > 0) {
+            if ($siswaTanpaRombel > 0) {
                 return response()->json([
                     'success' => false,
-                    'message' => "Masih ada {$siswaBelumDiproses} siswa pada jenjang ini yang belum diproses kenaikan kelasnya."
+                    'message' => "Masih ada {$siswaTanpaRombel} siswa pada jenjang ini yang belum ditempatkan ke dalam rombel di tahun ajaran baru."
+                ], 422);
+            }
+
+            // 4. Wali kelas lengkap: Semua rombel di tahun target pada jenjang ini harus memiliki wali kelas
+            $rombelTanpaWali = Rombel::where('tahun_ajaran_id', $tahunTarget->id)
+                ->where('jenjang_id', $jenjangId)
+                ->whereNull('guru_id')
+                ->count();
+
+            if ($rombelTanpaWali > 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Masih ada {$rombelTanpaWali} rombel pada jenjang ini di tahun ajaran baru yang belum ditentukan wali kelasnya."
                 ], 422);
             }
 
@@ -580,6 +659,18 @@ class KenaikanKelasController extends Controller
             ], 422);
         }
 
+        // 1. Promosi selesai global
+        $siswaBelumDiproses = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
+            ->where('is_processed', 0)
+            ->count();
+        if ($siswaBelumDiproses > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "Masih ada {$siswaBelumDiproses} siswa yang belum diproses kenaikan kelasnya."
+            ], 422);
+        }
+
+        // 2. Siswa baru selesai global
         $siswaBaruBelumDiproses = DB::table('siswas')->where('is_processed', 0)->count();
         if ($siswaBaruBelumDiproses > 0) {
             return response()->json([
@@ -588,13 +679,26 @@ class KenaikanKelasController extends Controller
             ], 422);
         }
 
-        $siswaBelumDiproses = SiswaTahun::where('tahun_ajaran_id', $tahunAktif->id)
-            ->where('is_processed', 0)
+        // 3. Penempatan selesai global
+        $siswaTanpaRombel = SiswaTahun::where('tahun_ajaran_id', $tahunTarget->id)
+            ->where('status', 'AKTIF')
+            ->whereNull('rombel_id')
             ->count();
-        if ($siswaBelumDiproses > 0) {
+        if ($siswaTanpaRombel > 0) {
             return response()->json([
                 'success' => false,
-                'message' => "Masih ada {$siswaBelumDiproses} siswa yang belum diproses kenaikan kelasnya."
+                'message' => "Masih ada {$siswaTanpaRombel} siswa yang belum ditempatkan ke dalam rombel di tahun ajaran baru."
+            ], 422);
+        }
+
+        // 4. Wali kelas lengkap global
+        $rombelTanpaWali = Rombel::where('tahun_ajaran_id', $tahunTarget->id)
+            ->whereNull('guru_id')
+            ->count();
+        if ($rombelTanpaWali > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => "Masih ada {$rombelTanpaWali} rombel di tahun ajaran baru yang belum ditentukan wali kelasnya."
             ], 422);
         }
 
@@ -628,7 +732,7 @@ class KenaikanKelasController extends Controller
     public function statusKeseluruhan(Request $request)
     {
         $user = $request->user();
-        $tahunAktif = TahunAjaran::where('aktif', 1)->first();
+        $tahunAktif = TahunAjaran::getAktif();
 
         if (!$tahunAktif) {
             return response()->json([
@@ -638,19 +742,12 @@ class KenaikanKelasController extends Controller
             ], 404);
         }
 
-        $targetNama = null;
-        if (preg_match('/^(\d{4})\/(\d{4})$/', $tahunAktif->nama, $matches)) {
-            $targetNama = ($matches[1] + 1) . '/' . ($matches[2] + 1);
-        }
-
-        $tahunTarget = $targetNama
-            ? TahunAjaran::where('nama', $targetNama)->first()
-            : null;
+        $tahunTarget = $tahunAktif->getNextTahunAjaran();
 
         if (!$tahunTarget) {
             return response()->json([
                 'success' => false,
-                'message' => 'Tahun ajaran target (' . $targetNama . ') tidak ditemukan',
+                'message' => 'Tahun ajaran target berikutnya tidak ditemukan',
                 'data' => null
             ], 404);
         }
